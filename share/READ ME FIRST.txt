@@ -1,0 +1,31 @@
+PHOSPHOR COUNT  -  boss respawn timer
+====================================
+
+No install needed.
+
+1. Right-click the zip > "Extract All..." > Extract.
+   (Don't run it from inside the zip, and keep the folder together:
+    PhosphorCount.exe needs the "_internal" folder next to it.)
+
+2. Double-click PhosphorCount.exe.
+   If Windows says "Windows protected your PC": click "More info",
+   then "Run anyway". (It shows that for any small app that isn't
+   signed by a big company.)
+
+Using it:
+  +            add a timer (it shows up as Ch. 0 - type the channel, Enter)
+  Ch. 0        click it to change the channel number (0-100)
+  Skull        the boss died: start the 60-minute respawn countdown
+  X            hold for 3 seconds to delete the timer
+  BY CH        click to switch between sorting by channel and by time left
+
+When a countdown hits zero the row flashes and keeps counting in red
+until you press the skull again.
+
+Drag the window anywhere. Right-click for respawn time, opacity and
+color palettes.
+
+Your timers and settings are saved in %APPDATA%\PhosphorCount, so they
+keep running even if you close the app.
+
+It's only a timer: it never looks at the screen or touches the game.

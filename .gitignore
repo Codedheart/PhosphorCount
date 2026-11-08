@@ -1,0 +1,15 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+
+# PyInstaller build output
+build/
+dist/
+*.spec
+PhosphorCount-windows.zip
+
+# Font is fetched by run.bat / build.bat
+phosphor/assets/VT323-Regular.ttf
+phosphor/assets/VT323-OFL.txt

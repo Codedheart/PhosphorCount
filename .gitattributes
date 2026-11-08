@@ -1,2 +1,10 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Windows batch files must keep CRLF or cmd.exe can misread labels
+*.bat text eol=crlf
+
+# Binary assets
+*.png binary
+*.ico binary
+*.ttf binary
