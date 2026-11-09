@@ -784,6 +784,17 @@ class App:
             return
         self.quit()          # the helper waits for us to exit, then swaps files and restarts us
 
+    def open_data_folder(self) -> None:
+        """Where timers, settings and error.log live (%APPDATA%\\PhosphorCount)."""
+        folder = str(data_dir())
+        try:
+            if winapi.IS_WIN:
+                os.startfile(folder)
+            else:
+                webbrowser.open(Path(folder).as_uri())
+        except OSError:
+            self.flash("COULDN'T OPEN SETTINGS FOLDER", 4)
+
     def _dialog(self, title: str, body: str, buttons) -> None:
         if self.dialog:
             self.dialog.close()
@@ -852,6 +863,7 @@ class App:
         av = tk.BooleanVar(value=bool(self.cfg.get("auto_update", True)))
         m.add_checkbutton(label="Check for updates automatically", variable=av,
                           command=lambda: self.set_cfg("auto_update", not self.cfg.get("auto_update", True)))
+        m.add_command(label="Open settings folder", command=self.open_data_folder)
         m.add_command(label=f"Phosphor Count {self._version_label()}", state="disabled")
         m.add_separator()
         m.add_command(label="Exit", command=self.quit)

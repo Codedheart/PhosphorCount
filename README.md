@@ -29,7 +29,7 @@ says "Windows protected your PC", click **More info**, then **Run anyway**.
 | **X** (hold 3 s) | Delete the timer. A red bar fills while you hold; let go early to cancel |
 | **BY CH / BY TIME** | Toggle sorting: by channel number, or by time left (most time left at the top, overdue at the bottom, not-started after that) |
 | Drag empty space | Move the window |
-| Right-click | Menu: respawn time, warning highlight, opacity, color palette, hide from screen capture, exit |
+| Right-click | Menu: respawn time, warning highlight, opacity, color palette, hide from screen capture, check for updates, open settings folder, exit |
 | Mouse wheel | Scroll when you have more timers than fit (12 rows by default) |
 
 - Timers don't start on their own. Press the skull when the boss dies.
