@@ -10,6 +10,9 @@ dist/
 *.spec
 PhosphorCount-windows.zip
 
+# Written by build.bat / the release workflow from the git tag
+phosphor/_build_version.py
+
 # Font is fetched by run.bat / build.bat
 phosphor/assets/VT323-Regular.ttf
 phosphor/assets/VT323-OFL.txt

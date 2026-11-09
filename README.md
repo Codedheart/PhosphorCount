@@ -44,6 +44,22 @@ says "Windows protected your PC", click **More info**, then **Run anyway**.
 - Timers keep running while the app is closed. They're saved with your settings in
   `%APPDATA%\PhosphorCount\config.json`.
 
+## Updates
+
+The downloaded app checks GitHub for a newer release when it starts (and every few hours). When
+there is one, the header shows **UPDATE v1.x >**. Click it, then **INSTALL**: it downloads the
+new zip, checks it, closes, swaps in the new files and reopens. If anything goes wrong it puts the
+old version back. Right-click has **Check for updates** and an option to turn automatic checks off.
+
+Timers and settings are stored in `%APPDATA%\PhosphorCount`, not in the app folder, so updates
+never touch them.
+
+The app has to be able to change its own folder, so keep it somewhere you own, like
+**Documents** or the **Desktop**. If it's in Program Files (or was opened straight from inside the
+zip) it tells you that and where to move it instead of trying.
+
+Releasing: push a tag like `v1.3`. The version shown in the app comes from that tag.
+
 ## Run from source
 
 Needs Python 3.10+ from [python.org](https://www.python.org/downloads/) (standard library only, no

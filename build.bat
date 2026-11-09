@@ -28,6 +28,18 @@ if not exist phosphor\assets\VT323-Regular.ttf (
   powershell -NoProfile -Command "try { Invoke-WebRequest -UseBasicParsing 'https://github.com/google/fonts/raw/main/ofl/vt323/VT323-Regular.ttf' -OutFile 'phosphor\assets\VT323-Regular.ttf'; Invoke-WebRequest -UseBasicParsing 'https://github.com/google/fonts/raw/main/ofl/vt323/OFL.txt' -OutFile 'phosphor\assets\VT323-OFL.txt' } catch { Write-Host '  font skipped (falls back to Lucida Console)' }"
 )
 
+rem Stamp the version from the git tag on this commit (untagged builds report 'dev'
+rem and never offer to update themselves)
+set "TAG="
+for /f "delims=" %%T in ('git describe --tags --exact-match 2^>nul') do set "TAG=%%T"
+if defined TAG (
+  > phosphor\_build_version.py echo VERSION = "%TAG:v=%"
+  echo Version %TAG%
+) else (
+  if exist phosphor\_build_version.py del phosphor\_build_version.py
+  echo No tag on this commit: building as 'dev' ^(no auto-update^)
+)
+
 echo Building PhosphorCount.exe ...
 if exist build rmdir /s /q build
 if exist dist\PhosphorCount rmdir /s /q dist\PhosphorCount

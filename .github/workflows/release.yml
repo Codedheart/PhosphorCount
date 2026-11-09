@@ -37,6 +37,13 @@ jobs:
           Invoke-WebRequest -UseBasicParsing 'https://github.com/google/fonts/raw/main/ofl/vt323/VT323-Regular.ttf' -OutFile 'phosphor/assets/VT323-Regular.ttf'
           Invoke-WebRequest -UseBasicParsing 'https://github.com/google/fonts/raw/main/ofl/vt323/OFL.txt' -OutFile 'phosphor/assets/VT323-OFL.txt'
 
+      - name: Stamp version from tag
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        run: |
+          "VERSION = '$($env:GITHUB_REF_NAME.TrimStart('v'))'" | Set-Content phosphor/_build_version.py -Encoding utf8
+          Get-Content phosphor/_build_version.py
+
       - name: Build PhosphorCount.exe
         run: >
           python -m PyInstaller --noconfirm --clean --log-level WARN

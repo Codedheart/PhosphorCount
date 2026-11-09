@@ -30,6 +30,7 @@ DEFAULTS: dict = {
     "soon_min": 5,                # timer turns the warning colour in its last N minutes (0 = off)
     "max_rows": 12,               # taller lists scroll with the mouse wheel
     "hide_from_capture": False,
+    "auto_update": True,          # check GitHub for a newer release at startup / every few hours
     "timers": [],
     "config_version": 2,
 }

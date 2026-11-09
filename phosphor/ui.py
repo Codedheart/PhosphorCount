@@ -1,14 +1,19 @@
 """The always-on-top CRT boss-timer window (Tkinter, stdlib only)."""
 from __future__ import annotations
 
+import os
+import queue
 import sys
+import threading
 import time
 import tkinter as tk
+import webbrowser
 import tkinter.font as tkfont
 from pathlib import Path
 
-from . import themes, winapi
+from . import themes, updater, winapi
 from .config import APP_NAME, Config, data_dir
+from .version import VERSION
 from .timers import (CH_MAX, SORT_CHANNEL, SORT_TIME, Board, channel_text_ok, fmt_clock,
                      status_text)
 
@@ -16,6 +21,7 @@ ASSETS = Path(__file__).parent / "assets"
 HOLD_SEC = 3.0        # hold the X this long to delete a timer
 ALERT_SEC = 8.0       # how long a row flashes when its boss is due
 TICK_MS = 200
+UPDATE_CHECK_MS = 6 * 3600 * 1000   # re-check GitHub every 6 hours while open
 
 # 8x8 pixel icons, drawn as rectangles so they scale and follow the palette
 SKULL = [".######.",
@@ -90,6 +96,11 @@ class App:
         self._drag = None
         self._menu_open = False
         self._rows_shown = -1
+        self.upd_q: "queue.Queue[tuple]" = queue.Queue()
+        self.update_rel: updater.Release | None = None   # newer release found on GitHub
+        self.update_busy: str | None = None              # header text while downloading
+        self.dialog: Dialog | None = None
+        self._closing = False
 
         self.root = tk.Tk()
         self.root.report_callback_exception = self._log_exc
@@ -130,7 +141,9 @@ class App:
         self.root.after(TICK_MS, self._tick)
         self.root.after(530, self._blink)
         self.root.after(2000, self._keep_on_top)
+        self.root.after(4000, self._auto_check)
         self.root.protocol("WM_DELETE_WINDOW", self.quit)
+        self._report_last_update()
 
     # ---------------------------------------------------------------- setup
     def _after_mapped(self) -> None:
@@ -313,6 +326,14 @@ class App:
         if now_m < self.status_until:
             self._text(L, hy, self._fit(self.status, room, self.f_small), self.f_small, th["warn"],
                        glow=False)
+        elif self.update_busy:
+            self._text(L, hy, self._fit(self.update_busy, room, self.f_small), self.f_small, th["warn"],
+                       glow=False)
+        elif self.update_rel:
+            txt = self._fit(f"UPDATE {self.update_rel.tag} >", room, self.f_small)
+            self._hit(L - 3, 4, L + self.f_small.measure(txt) + 3, self.hh, "update")
+            self._text(L, hy, txt, self.f_small,
+                       th["fg"] if self.hover == ("update", None) else th["warn"], glow=False)
         else:
             self._text(L, hy, f"PHOSPHOR-COUNT {'█' if self.blink else ' '}", self.f_small, th["dim"],
                        glow=False)
@@ -441,12 +462,17 @@ class App:
         self.blink = not self.blink
 
     def _tick(self) -> None:
+        if self._closing:
+            return
         try:
-            self._render()
+            self._drain_updates()
+            if not self._closing:
+                self._render()
         except Exception:
             self._log_exc(*sys.exc_info())
         finally:
-            self.root.after(TICK_MS, self._tick)
+            if not self._closing:
+                self.root.after(TICK_MS, self._tick)
 
     # -------------------------------------------------------------- mouse
     def _press(self, e) -> None:
@@ -468,6 +494,8 @@ class App:
             self.kill(uid)
         elif kind == "copy":
             self.copy_status(uid)
+        elif kind == "update":
+            self.offer_update()
         elif kind == "del":
             self.hold = (uid, time.monotonic())
             self._hold_tick()
@@ -631,7 +659,140 @@ class App:
         self._render()
         return "break"
 
+    # -------------------------------------------------------------- updates
+    @staticmethod
+    def _version_label() -> str:
+        return f"v{VERSION}" if updater.parse_version(VERSION) else "(from source)"
+
+    def _report_last_update(self) -> None:
+        try:
+            result = updater.take_result()
+        except OSError:
+            return
+        if result == "ok":
+            self.flash(f"UPDATED TO {self._version_label().upper()}", 6)
+        elif result == "fail":
+            self.flash("UPDATE FAILED - OLD VERSION KEPT", 8)
+
+    def _auto_check(self) -> None:
+        self.root.after(UPDATE_CHECK_MS, self._auto_check)
+        # from source there's nothing to install; `git pull` updates instead
+        if self.cfg.get("auto_update", True) and updater.parse_version(VERSION) and not self.update_busy:
+            self.check_updates(manual=False)
+
+    def check_updates(self, manual: bool) -> None:
+        if manual:
+            self.flash("CHECKING FOR UPDATES...", 10)
+
+        def work():
+            try:
+                self.upd_q.put(("checked", updater.latest_release(), manual, None))
+            except Exception as e:
+                self.upd_q.put(("checked", None, manual, str(e) or "UPDATE CHECK FAILED"))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _drain_updates(self) -> None:
+        while True:
+            try:
+                msg = self.upd_q.get_nowait()
+            except queue.Empty:
+                return
+            kind = msg[0]
+            if kind == "checked":
+                _k, rel, manual, err = msg
+                mine = updater.parse_version(VERSION)
+                if err:
+                    if manual:
+                        self.flash(err.upper(), 5)
+                elif rel and mine and updater.is_newer(rel.version, mine):
+                    self.update_rel = rel
+                    if manual:
+                        self.status_until = 0
+                        self.offer_update()
+                elif manual:
+                    if not mine:
+                        self.flash(f"LATEST IS {rel.tag} - GIT PULL" if rel else "NO RELEASES YET", 6)
+                    else:
+                        self.flash(f"UP TO DATE ({self._version_label().upper()})", 4)
+            elif kind == "progress":
+                self.update_busy = f"DOWNLOADING {int(msg[1] * 100)}%"
+            elif kind == "ready":
+                self._install(msg[1], msg[2])
+            elif kind == "failed":
+                self.update_busy = None
+                self.flash(f"UPDATE FAILED: {msg[1]}", 8)
+
+    def offer_update(self) -> None:
+        rel = self.update_rel
+        if rel is None or self.update_busy:
+            return
+        where = updater.app_dir()
+        if where is None:
+            self._dialog("UPDATE AVAILABLE",
+                         f"{rel.tag} is out. You're running Phosphor Count from source, so update "
+                         "it with `git pull` in the repo folder (or download the zip).",
+                         [("DOWNLOAD PAGE", lambda: webbrowser.open(rel.page_url)), ("OK", None)])
+            return
+        problem = updater.location_problem(where)
+        if problem:
+            self._dialog("CAN'T UPDATE HERE", problem,
+                         [("DOWNLOAD MANUALLY", lambda: webbrowser.open(rel.page_url)), ("OK", None)])
+            return
+        if not rel.asset_url:
+            self._dialog("UPDATE AVAILABLE", f"{rel.tag} is out but has no {updater.ASSET} yet. "
+                         "It may still be building - try again in a few minutes.",
+                         [("DOWNLOAD PAGE", lambda: webbrowser.open(rel.page_url)), ("OK", None)])
+            return
+        self._dialog(f"UPDATE {rel.tag} AVAILABLE",
+                     f"You have {self._version_label()}. Phosphor Count will download the update, "
+                     "close, swap in the new files and reopen.\n\nYour timers are saved separately "
+                     "and keep counting.",
+                     [("INSTALL", self._start_download), ("WHAT'S NEW", lambda: webbrowser.open(rel.page_url)),
+                      ("LATER", None)])
+
+    def _start_download(self) -> None:
+        rel = self.update_rel
+        if rel is None or self.update_busy:
+            return
+        self.update_busy = "DOWNLOADING 0%"
+        stage = updater.staging_dir()
+
+        def work():
+            try:
+                stage.mkdir(parents=True, exist_ok=True)
+                z = updater.download(rel, stage / updater.ASSET,
+                                     progress=lambda f: self.upd_q.put(("progress", f)))
+                self.upd_q.put(("progress", 1.0))
+                new = updater.extract(z, stage / "new")
+                self.upd_q.put(("ready", new, rel))
+            except updater.UpdateError as e:
+                self.upd_q.put(("failed", str(e)))
+            except Exception as e:
+                self.upd_q.put(("failed", type(e).__name__.upper()))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _install(self, new, rel) -> None:
+        self.update_busy = "INSTALLING..."
+        try:
+            bat = updater.write_helper(updater.staging_dir(), updater.app_dir(), new, rel.tag,
+                                       os.getpid())
+            updater.launch_helper(bat)
+        except Exception as e:
+            self.update_busy = None
+            msg = str(e) if isinstance(e, updater.UpdateError) else type(e).__name__.upper()
+            self.flash(f"UPDATE FAILED: {msg}", 8)
+            return
+        self.quit()          # the helper waits for us to exit, then swaps files and restarts us
+
+    def _dialog(self, title: str, body: str, buttons) -> None:
+        if self.dialog:
+            self.dialog.close()
+        self.dialog = Dialog(self, title, body, buttons)
+
     def quit(self) -> None:
+        if self._closing:
+            return
+        self._closing = True
         if self.editing is not None:
             self._end_edit(True)
         if self.root.winfo_viewable():
@@ -684,8 +845,17 @@ class App:
         m.add_checkbutton(label="Hide from screen capture", variable=hv,
                           command=lambda: self.set_cfg("hide_from_capture", not self.cfg["hide_from_capture"]))
         m.add_separator()
+        m.add_separator()
+        if self.update_rel:
+            m.add_command(label=f"Install update {self.update_rel.tag}...", command=self.offer_update)
+        m.add_command(label="Check for updates", command=lambda: self.check_updates(manual=True))
+        av = tk.BooleanVar(value=bool(self.cfg.get("auto_update", True)))
+        m.add_checkbutton(label="Check for updates automatically", variable=av,
+                          command=lambda: self.set_cfg("auto_update", not self.cfg.get("auto_update", True)))
+        m.add_command(label=f"Phosphor Count {self._version_label()}", state="disabled")
+        m.add_separator()
         m.add_command(label="Exit", command=self.quit)
-        self._menu_vars = (sv, rv, wv, ov, tv, hv)   # keep references alive
+        self._menu_vars = (sv, rv, wv, ov, tv, hv, av)   # keep references alive
 
         x, y = self._menu_pos(m, e.x_root, e.y_root)
         self._menu_open = True
@@ -759,3 +929,55 @@ class App:
 
     def run(self) -> None:
         self.root.mainloop()
+
+
+class Dialog:
+    """Small CRT-styled message box beside the main window (no white system dialogs)."""
+
+    def __init__(self, app: App, title: str, body: str, buttons) -> None:
+        self.app = app
+        th = app.th
+        self.win = w = tk.Toplevel(app.root, bg=th["dim"], padx=1, pady=1)
+        w.overrideredirect(True)
+        w.attributes("-topmost", True)
+        inner = tk.Frame(w, bg=th["bg"], padx=12, pady=10, highlightthickness=1,
+                         highlightbackground=th["glow"])
+        inner.pack(fill="both", expand=True)
+        width = max(280, app.f_mid.measure("M") * 34)
+        tk.Label(inner, text=title, bg=th["bg"], fg=th["warn"], font=app.f_mid, anchor="w",
+                 justify="left").pack(fill="x")
+        tk.Label(inner, text=body, bg=th["bg"], fg=th["fg"], font=app.f_small, anchor="w",
+                 justify="left", wraplength=width).pack(fill="x", pady=(6, 10))
+        row = tk.Frame(inner, bg=th["bg"])
+        row.pack(fill="x")
+        for label, action in buttons:
+            b = tk.Label(row, text=f"[ {label} ]", bg=th["bg"], fg=th["mid"], font=app.f_small,
+                         cursor="hand2")
+            b.pack(side="left", padx=(0, 10))
+            b.bind("<Enter>", lambda e, b=b: b.configure(fg=th["fg"], bg=th["glow"]))
+            b.bind("<Leave>", lambda e, b=b: b.configure(fg=th["mid"], bg=th["bg"]))
+            b.bind("<Button-1>", lambda e, a=action: self._click(a))
+        w.bind("<Escape>", lambda e: self.close())
+        w.update_idletasks()
+        self._place()
+
+    def _place(self) -> None:
+        root, w = self.app.root, self.win
+        dw, dh = w.winfo_reqwidth(), w.winfo_reqheight()
+        ox, oy, ow = root.winfo_rootx(), root.winfo_rooty(), root.winfo_width()
+        wa = winapi.work_area(root.winfo_id()) or (0, 0, root.winfo_screenwidth(), root.winfo_screenheight())
+        left, top, right, bottom = wa
+        x = ox + ow + 6 if ox + ow + 6 + dw <= right else max(left, ox - 6 - dw)
+        y = min(max(oy, top), bottom - dh)
+        w.geometry(f"+{int(x)}+{int(y)}")
+
+    def _click(self, action) -> None:
+        self.close()
+        if action:
+            action()
+
+    def close(self) -> None:
+        if self.win.winfo_exists():
+            self.win.destroy()
+        if self.app.dialog is self:
+            self.app.dialog = None
