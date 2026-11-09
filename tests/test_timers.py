@@ -101,3 +101,21 @@ def test_round_trip_and_bad_data():
     assert [(t.channel, t.killed_at, t.duration) for t in b3.timers][0] == (0, None, 3600.0)
     assert [t.fresh for t in b3.timers] == [False, False, True]   # duplicate ch 7 parked
     assert Board.from_list(None).timers == []
+
+
+def test_status_text():
+    from phosphor.timers import status_text
+    b = Board()
+    t = b.add()
+    b.set_channel(t.uid, 25)
+    assert status_text(t, 0) == "Ch. 25 has no timer running."
+    b.kill(t.uid, 1000.0, 3600)
+    assert status_text(t, 1000.0) == "Ch. 25 is ready in 60 minutes."
+    assert status_text(t, 1000.0 + 3600 - 721) == "Ch. 25 is ready in 13 minutes."   # 12:01 left
+    assert status_text(t, 1000.0 + 3600 - 60) == "Ch. 25 is ready in 1 minute."
+    assert status_text(t, 1000.0 + 3600 - 59) == "Ch. 25 is ready in 59 seconds."
+    assert status_text(t, 1000.0 + 3600 - 1) == "Ch. 25 is ready in 1 second."
+    assert status_text(t, 1000.0 + 3600) == "Ch. 25 is ready now."
+    assert status_text(t, 1000.0 + 3600 + 45) == "Ch. 25 is overtime by 45 seconds."
+    assert status_text(t, 1000.0 + 3600 + 61) == "Ch. 25 is overtime by 1 minute."
+    assert status_text(t, 1000.0 + 3600 + 600) == "Ch. 25 is overtime by 10 minutes."

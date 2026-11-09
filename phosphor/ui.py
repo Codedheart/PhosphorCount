@@ -9,7 +9,8 @@ from pathlib import Path
 
 from . import themes, winapi
 from .config import APP_NAME, Config, data_dir
-from .timers import (CH_MAX, SORT_CHANNEL, SORT_TIME, Board, channel_text_ok, fmt_clock)
+from .timers import (CH_MAX, SORT_CHANNEL, SORT_TIME, Board, channel_text_ok, fmt_clock,
+                     status_text)
 
 ASSETS = Path(__file__).parent / "assets"
 HOLD_SEC = 3.0        # hold the X this long to delete a timer
@@ -33,6 +34,14 @@ CROSS = ["##....##",
          ".######.",
          "###..###",
          "##....##"]
+COPY = ["#####...",
+        "#...#...",
+        "#..#####",
+        "#..#...#",
+        "#..#...#",
+        "####...#",
+        "...#...#",
+        "...#####"]
 PLUS = ["...##...",
         "...##...",
         "...##...",
@@ -72,6 +81,7 @@ class App:
         self.hold: tuple[int, float] | None = None   # (uid, started) while X is held
         self.editing: int | None = None          # uid whose channel is being typed
         self.pulse: dict[int, float] = {}        # uid -> until (skull press feedback)
+        self.copied: dict[int, float] = {}       # uid -> until (copy press feedback)
         self.alert: dict[int, float] = {}        # uid -> until (boss just became due)
         self.prev_rem: dict[int, float] = {}
         self.order: list[int] = []
@@ -199,12 +209,13 @@ class App:
         self.L = 10
         self.rh = max(self.lh_t, self.isz + 6) + 3
         self.hh = max(self.lh_s, self.isz) + 8
-        # columns: [Ch. 100] [  -00:00] [skull] [X]
+        # columns: [Ch. 100] [  -00:00] [skull] [copy] [X]
         lab_w = md.measure("Ch. 100")
         time_w = tm.measure("-000:00")
         self.x_time = self.L + lab_w + 6 + time_w             # right edge of the countdown
         self.x_skull = self.x_time + 10
-        self.x_del = self.x_skull + self.isz + 10
+        self.x_copy = self.x_skull + self.isz + 8
+        self.x_del = self.x_copy + self.isz + 12
         row_w = self.x_del + self.isz + 10
         head_w = self.L + sm.measure("PHOSPHOR-COUNT █") + 10 + sm.measure("BY TIME") + 8 + self.isz + 10
         self.W = max(row_w, head_w)
@@ -353,6 +364,14 @@ class App:
             else:
                 sk = th["mid"]
             self._icon(SKULL, self.x_skull, iy, sk)
+            self._hit(self.x_copy - 3, y0, self.x_copy + isz + 3, y0 + self.rh - 3, "copy", uid)
+            if self.copied.get(uid, 0) > now_m:
+                cc = th["warn"]
+            elif self.hover == ("copy", uid):
+                cc = th["fg"]
+            else:
+                cc = th["mid"]
+            self._icon(COPY, self.x_copy, iy, cc)
             held = self.hold is not None and self.hold[0] == uid
             self._hit(self.x_del - 3, y0, self.x_del + isz + 3, y0 + self.rh - 3, "del", uid)
             xc = th["late"] if held else (th["fg"] if self.hover == ("del", uid) else th["dim"])
@@ -409,7 +428,7 @@ class App:
                 self.alert[t.uid] = now_m + ALERT_SEC
                 self.flash(f"CH. {t.channel} BOSS IS UP", ALERT_SEC)
             self.prev_rem[t.uid] = r
-        for d in (self.prev_rem, self.alert, self.pulse):
+        for d in (self.prev_rem, self.alert, self.pulse, self.copied):
             for uid in [u for u in d if u not in live]:
                 d.pop(uid, None)
 
@@ -447,6 +466,8 @@ class App:
             self._start_edit(uid)
         elif kind == "kill":
             self.kill(uid)
+        elif kind == "copy":
+            self.copy_status(uid)
         elif kind == "del":
             self.hold = (uid, time.monotonic())
             self._hold_tick()
@@ -533,6 +554,18 @@ class App:
         self.alert.pop(uid, None)
         self.prev_rem.pop(uid, None)
         self.save()
+        self._render()
+
+    def copy_status(self, uid: int) -> None:
+        """Put e.g. 'Ch. 25 is ready in 12 minutes.' on the clipboard, ready to paste in chat."""
+        t = self.board.get(uid)
+        if t is None:
+            return
+        self.root.clipboard_clear()
+        self.root.clipboard_append(status_text(t, time.time()))
+        self.root.update_idletasks()
+        self.copied[uid] = time.monotonic() + 0.6
+        self.flash(f"COPIED CH. {t.channel}", 2)
         self._render()
 
     def set_sort(self, mode: str) -> None:

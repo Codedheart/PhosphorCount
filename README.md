@@ -6,10 +6,10 @@ timer: it never reads the screen or touches the game.
 
 ```
 PHOSPHOR-COUNT █         BY CH  +
-Ch. 3          -01:41    ☠  ✕     <- overdue: counts up in red
-Ch. 12          49:59    ☠  ✕
-Ch. 27          03:19    ☠  ✕     <- almost up: warning colour
-Ch. 40          --:--    ☠  ✕     <- not started yet
+Ch. 3          -01:41    ☠  ⧉  ✕     <- overdue: counts up in red
+Ch. 12          49:59    ☠  ⧉  ✕
+Ch. 27          03:19    ☠  ⧉  ✕     <- almost up: warning colour
+Ch. 40          --:--    ☠  ⧉  ✕     <- not started yet
 ```
 
 ## Download (no Python needed)
@@ -25,6 +25,7 @@ says "Windows protected your PC", click **More info**, then **Run anyway**.
 | **+** | Add a timer. It appears at the bottom as **Ch. 0** with the number ready to type |
 | **Ch. 0** (click it) | Edit the channel number in place: type 0-100, **Enter** to save, **Esc** to cancel. Up/Down arrows or the mouse wheel step it by one |
 | **Skull** | The boss died: start (or restart) the respawn countdown |
+| **Copy** (two pages) | Copy a status line to paste in chat: `Ch. 25 is ready in 12 minutes.` or `Ch. 10 is overtime by 45 seconds.` (seconds under a minute, otherwise minutes) |
 | **X** (hold 3 s) | Delete the timer. A red bar fills while you hold; let go early to cancel |
 | **BY CH / BY TIME** | Toggle sorting: by channel number, or by time left (most time left at the top, overdue at the bottom, not-started after that) |
 | Drag empty space | Move the window |

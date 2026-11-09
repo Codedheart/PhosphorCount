@@ -58,6 +58,27 @@ def fmt_clock(remaining: float | None) -> str:
     return f"{sign}{s // 60:02d}:{s % 60:02d}"
 
 
+def _amount(seconds: int) -> str:
+    if seconds < 60:
+        return f"{seconds} second{'s' if seconds != 1 else ''}"
+    m = seconds // 60
+    return f"{m} minute{'s' if m != 1 else ''}"
+
+
+def status_text(t: Timer, now: float) -> str:
+    """One line to paste into chat, e.g. 'Ch. 25 is ready in 12 minutes.'"""
+    r = t.remaining(now)
+    if r is None:
+        return f"Ch. {t.channel} has no timer running."
+    s = math.ceil(r - 1e-6)
+    if s > 0:
+        # round up so "ready in" never promises the boss earlier than it spawns
+        return f"Ch. {t.channel} is ready in {_amount(s if s < 60 else math.ceil(s / 60) * 60)}."
+    if s == 0:
+        return f"Ch. {t.channel} is ready now."
+    return f"Ch. {t.channel} is overtime by {_amount(-s)}."
+
+
 class Board:
     def __init__(self) -> None:
         self.timers: list[Timer] = []

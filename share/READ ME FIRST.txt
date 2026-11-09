@@ -16,6 +16,7 @@ Using it:
   +            add a timer (it shows up as Ch. 0 - type the channel, Enter)
   Ch. 0        click it to change the channel number (0-100)
   Skull        the boss died: start the 60-minute respawn countdown
+  Copy         copy "Ch. 25 is ready in 12 minutes." to paste in chat
   X            hold for 3 seconds to delete the timer
   BY CH        click to switch between sorting by channel and by time left
 
