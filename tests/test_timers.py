@@ -98,7 +98,7 @@ def test_round_trip_and_bad_data():
     junk = [{"channel": 500, "killed_at": "x", "duration": -5}, "nope",
             {"channel": 7}, {"channel": 7}]
     b3 = Board.from_list(junk)
-    assert [(t.channel, t.killed_at, t.duration) for t in b3.timers][0] == (0, None, 3600.0)
+    assert [(t.channel, t.killed_at, t.duration) for t in b3.timers][0] == (0, None, 4800.0)
     assert [t.fresh for t in b3.timers] == [False, False, True]   # duplicate ch 7 parked
     assert Board.from_list(None).timers == []
 

@@ -26,11 +26,12 @@ DEFAULTS: dict = {
     "opacity": 0.9,
     "theme": "green",             # see phosphor/themes.py
     "sort": "channel",            # "channel" | "time"
-    "respawn_min": 60,            # countdown length used for the next boss kill
+    "respawn_min": 80,            # countdown length used for the next boss kill
     "soon_min": 5,                # timer turns the warning colour in its last N minutes (0 = off)
     "max_rows": 12,               # taller lists scroll with the mouse wheel
     "hide_from_capture": False,
     "timers": [],
+    "config_version": 2,
 }
 
 
@@ -43,6 +44,10 @@ class Config(dict):
             for k, v in saved.items():
                 if k in DEFAULTS:
                     self[k] = v
+            # v1 shipped with a 60 min default; 80 min is the real minimum respawn
+            if saved.get("config_version", 1) < 2 and saved.get("respawn_min") == 60:
+                self["respawn_min"] = 80
+            self["config_version"] = DEFAULTS["config_version"]
         except (OSError, ValueError):
             pass
 

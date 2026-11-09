@@ -659,7 +659,7 @@ class App:
         sub = tk.Menu(m, **mk)
         rv = tk.IntVar(value=int(self.cfg["respawn_min"]))
         sub.add_command(label="applies to the next kill", state="disabled")
-        for mins in (15, 30, 45, 60, 90, 120, 180):
+        for mins in (15, 30, 45, 60, 80, 90, 120, 180):
             sub.add_radiobutton(label=f"{mins} min", value=mins, variable=rv,
                                 command=lambda v=mins: self.set_cfg("respawn_min", v))
         m.add_cascade(label=f"Respawn time ({int(self.cfg['respawn_min'])} min)", menu=sub)

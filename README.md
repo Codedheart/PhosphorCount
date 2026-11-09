@@ -35,7 +35,7 @@ says "Windows protected your PC", click **More info**, then **Run anyway**.
 - Timers don't start on their own. Press the skull when the boss dies.
 - When a countdown reaches zero, the row flashes and the header says **CH. n BOSS IS UP**. It then
   keeps counting in red (`-00:01`, `-00:02`…) until you press the skull again.
-- The respawn time defaults to **60 minutes**. Changing it in the menu applies to the next kill, so
+- The respawn time defaults to **80 minutes**. Changing it in the menu applies to the next kill, so
   timers already running keep their length.
 - In its last 5 minutes a timer turns the palette's warning color (change or turn off in the menu).
 - A new timer stays at the bottom until you give it a channel, then it sorts into place.

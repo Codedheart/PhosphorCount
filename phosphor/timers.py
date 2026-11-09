@@ -17,7 +17,7 @@ class Timer:
     uid: int
     channel: int = 0
     killed_at: float | None = None   # when the skull was pressed; None = not started
-    duration: float = 3600.0         # respawn length captured at kill time
+    duration: float = 4800.0         # respawn length captured at kill time
     fresh: bool = True               # just added and no channel set yet: stays at the bottom
 
     @property
@@ -156,8 +156,8 @@ class Board:
             t.channel = ch if valid_channel(ch) else 0
             ka = row.get("killed_at")
             t.killed_at = float(ka) if isinstance(ka, (int, float)) and not isinstance(ka, bool) else None
-            d = row.get("duration", 3600)
-            t.duration = float(d) if isinstance(d, (int, float)) and d > 0 else 3600.0
+            d = row.get("duration", 4800)
+            t.duration = float(d) if isinstance(d, (int, float)) and d > 0 else 4800.0
             t.fresh = bool(row.get("fresh", False))
             if not t.fresh and b.owner_of(t.channel, exclude=t.uid):
                 t.fresh = True        # duplicate in a hand-edited file: park it at the bottom
