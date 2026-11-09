@@ -11,17 +11,18 @@ import webbrowser
 import tkinter.font as tkfont
 from pathlib import Path
 
-from . import themes, updater, winapi
+from . import sync, themes, updater, winapi
 from .config import APP_NAME, Config, data_dir
 from .version import VERSION
 from .timers import (CH_MAX, SORT_CHANNEL, SORT_TIME, Board, channel_text_ok, fmt_clock,
-                     status_text)
+                     in_cooldown, status_text)
 
 ASSETS = Path(__file__).parent / "assets"
 HOLD_SEC = 3.0        # hold the X this long to delete a timer
 ALERT_SEC = 8.0       # how long a row flashes when its boss is due
 TICK_MS = 200
 UPDATE_CHECK_MS = 6 * 3600 * 1000   # re-check GitHub every 6 hours while open
+PENDING_SEC = 6.0     # how long our own group edits are trusted before the server echoes them
 
 # 8x8 pixel icons, drawn as rectangles so they scale and follow the palette
 SKULL = [".######.",
@@ -76,7 +77,8 @@ class App:
     def __init__(self) -> None:
         winapi.set_dpi_aware()
         self.cfg = Config()
-        self.board = Board.from_list(self.cfg.get("timers"))
+        self.solo = Board.from_list(self.cfg.get("timers"))   # your own timers
+        self.board = self.solo                                # what's on screen (solo or group)
         if self.cfg["sort"] not in (SORT_CHANNEL, SORT_TIME):
             self.cfg["sort"] = SORT_CHANNEL
 
@@ -101,6 +103,11 @@ class App:
         self.update_busy: str | None = None              # header text while downloading
         self.dialog: Dialog | None = None
         self._closing = False
+        self.grp_q: "queue.Queue[tuple]" = queue.Queue()
+        self.group: sync.Session | None = None      # joined group session
+        self.grp_state = ""                         # "", "joining", "live", "reconnecting"
+        self.pend_keep: dict[int, float] = {}       # channel -> until: our adds not echoed yet
+        self.pend_skip: dict[int, float] = {}       # channel -> until: our deletes not echoed yet
 
         self.root = tk.Tk()
         self.root.report_callback_exception = self._log_exc
@@ -144,6 +151,9 @@ class App:
         self.root.after(4000, self._auto_check)
         self.root.protocol("WM_DELETE_WINDOW", self.quit)
         self._report_last_update()
+        code = sync.normalize_code(str(self.cfg.get("group_code") or ""))
+        if code and self._server():
+            self.root.after(300, lambda: self.join_group(code, quiet=True))
 
     # ---------------------------------------------------------------- setup
     def _after_mapped(self) -> None:
@@ -208,7 +218,8 @@ class App:
             self.root.lift()
 
     def save(self) -> None:
-        self.cfg["timers"] = self.board.to_list()
+        self.cfg["timers"] = self.solo.to_list()     # group timers live on the server
+        self.cfg["group_code"] = self.group.code if self.group else ""
         self.cfg.save()
 
     # --------------------------------------------------------------- layout
@@ -303,7 +314,7 @@ class App:
 
     def _render(self) -> None:
         c, th = self.canvas, self.th
-        now_w, now_m = time.time(), time.monotonic()
+        now_w, now_m = self.now(), time.monotonic()
         if len(self.board.timers) != self._rows_shown:
             self._layout()
             return
@@ -334,6 +345,17 @@ class App:
             self._hit(L - 3, 4, L + self.f_small.measure(txt) + 3, self.hh, "update")
             self._text(L, hy, txt, self.f_small,
                        th["fg"] if self.hover == ("update", None) else th["warn"], glow=False)
+        elif self.group or self.grp_state == "joining":
+            if self.grp_state == "live":
+                txt, col = f"GROUP {self.group.code}", th["fg"] if self.hover == ("group", None) else th["mid"]
+            elif self.grp_state == "joining":
+                txt, col = "JOINING GROUP...", th["warn"]
+            else:
+                txt, col = "RECONNECTING...", th["warn"]
+            txt = self._fit(txt, room, self.f_small)
+            if self.group:
+                self._hit(L - 3, 4, L + self.f_small.measure(txt) + 3, self.hh, "group")
+            self._text(L, hy, txt, self.f_small, col, glow=False)
         else:
             self._text(L, hy, f"PHOSPHOR-COUNT {'█' if self.blink else ' '}", self.f_small, th["dim"],
                        glow=False)
@@ -380,6 +402,8 @@ class App:
             self._hit(self.x_skull - 3, y0, self.x_skull + isz + 3, y0 + self.rh - 3, "kill", uid)
             if self.pulse.get(uid, 0) > now_m:
                 sk = th["warn"]
+            elif in_cooldown(t, now_w, self._cooldown()):
+                sk = th["dim"]          # locked for a few seconds after a kill
             elif self.hover == ("kill", uid):
                 sk = th["fg"]
             else:
@@ -466,6 +490,7 @@ class App:
             return
         try:
             self._drain_updates()
+            self._drain_group()
             if not self._closing:
                 self._render()
         except Exception:
@@ -496,6 +521,8 @@ class App:
             self.copy_status(uid)
         elif kind == "update":
             self.offer_update()
+        elif kind == "group":
+            self.group_dialog()
         elif kind == "del":
             self.hold = (uid, time.monotonic())
             self._hold_tick()
@@ -548,6 +575,10 @@ class App:
             self.hold = None
             t = self.board.get(uid)
             self.board.remove(uid)
+            if t and self.group and not t.fresh:
+                self.pend_skip[t.channel] = time.monotonic() + PENDING_SEC
+                self.pend_keep.pop(t.channel, None)
+                self.group.delete(t.channel)
             self.save()
             if t:
                 self.flash(f"CH. {t.channel} DELETED", 3)
@@ -577,12 +608,28 @@ class App:
         t = self.board.get(uid)
         if t is None:
             return
-        self.board.kill(uid, time.time(), float(self.cfg["respawn_min"]) * 60)
+        if self.group and t.fresh:
+            self.flash("SET THE CHANNEL FIRST", 3)
+            return
+        if not self.board.kill(uid, self.now(), float(self.cfg["respawn_min"]) * 60, self._cooldown()):
+            self.flash(f"CH. {t.channel} JUST RESET", 2)
+            return
+        if self.group:
+            # shown right away; the server stamps the real time (or refuses if someone beat us)
+            self.group.kill(t.channel, t.duration)
         self.pulse[uid] = time.monotonic() + 0.35
         self.alert.pop(uid, None)
         self.prev_rem.pop(uid, None)
         self.save()
         self._render()
+
+    def _cooldown(self) -> float:
+        if self.group:
+            return float(sync.COOLDOWN_SEC)   # the server enforces this one
+        try:
+            return max(0.0, float(self.cfg.get("kill_cooldown_sec", 10)))
+        except (TypeError, ValueError):
+            return 10.0
 
     def copy_status(self, uid: int) -> None:
         """Put e.g. 'Ch. 25 is ready in 12 minutes.' on the clipboard, ready to paste in chat."""
@@ -590,7 +637,7 @@ class App:
         if t is None:
             return
         self.root.clipboard_clear()
-        self.root.clipboard_append(status_text(t, time.time()))
+        self.root.clipboard_append(status_text(t, self.now()))
         self.root.update_idletasks()
         self.copied[uid] = time.monotonic() + 0.6
         self.flash(f"COPIED CH. {t.channel}", 2)
@@ -648,10 +695,21 @@ class App:
         self.editing = None          # first, so the FocusOut that follows is ignored
         text = self.entry_var.get().strip()
         if commit and text:
+            t = self.board.get(uid)
+            was_fresh, old = (t.fresh, t.channel) if t else (True, 0)
             err = self.board.set_channel(uid, int(text))
             if err:
                 self.flash(err, 4)
             else:
+                if self.group and t and (was_fresh or old != t.channel):
+                    until = time.monotonic() + PENDING_SEC
+                    self.pend_keep[t.channel] = until
+                    self.pend_skip.pop(t.channel, None)
+                    if was_fresh:
+                        self.group.create(t.channel, float(self.cfg["respawn_min"]) * 60)
+                    else:
+                        self.pend_skip[old] = until
+                        self.group.move(old, t.channel, t.killed_at, t.duration)
                 self.save()
         self.entry.place_forget()
         self.canvas.focus_set()
@@ -795,15 +853,199 @@ class App:
         except OSError:
             self.flash("COULDN'T OPEN SETTINGS FOLDER", 4)
 
-    def _dialog(self, title: str, body: str, buttons) -> None:
+    # --------------------------------------------------------------- group
+    def now(self) -> float:
+        """Wall-clock seconds; in a group, the server's clock (everyone sees the same countdown)."""
+        return self.group.now() if self.group else time.time()
+
+    def _server(self) -> str:
+        return str(self.cfg.get("group_server") or sync.DEFAULT_SERVER or "").strip()
+
+    def _need_server(self) -> bool:
+        if self._server():
+            return False
+        self._dialog("GROUPS NOT SET UP",
+                     "This copy of Phosphor Count doesn't have a group server yet.\n\n"
+                     "Whoever builds it adds a free Firebase database (see the README, "
+                     "\"Group sessions\"), then group sessions work in every copy.",
+                     [("OK", None)])
+        return True
+
+    def host_group(self) -> None:
+        if self._need_server() or self.grp_state == "joining":
+            return
+        self.grp_state = "joining"
+        server = self._server()
+
+        def work():
+            try:
+                s = sync.Session.host(server, self.grp_q.put)
+                s.measure_offset()
+                self.grp_q.put(("joined", s, True))
+            except sync.SyncError as e:
+                self.grp_q.put(("joinfail", None, str(e), False))
+        threading.Thread(target=work, daemon=True).start()
+        self._render()
+
+    def ask_join(self) -> None:
+        if self._need_server():
+            return
+        self._dialog("JOIN A GROUP SESSION", "Type the 6-letter code from whoever is hosting.",
+                     [("JOIN", lambda code: self.join_group(code)), ("CANCEL", None)], entry=True)
+
+    def join_group(self, text: str, quiet: bool = False) -> None:
+        code = sync.normalize_code(text or "")
+        if not code:
+            self.flash("THAT'S NOT A GROUP CODE", 4)
+            return
+        if self.grp_state == "joining" or (self.group and self.group.code == code):
+            return
+        self.grp_state = "joining"
+        server = self._server()
+
+        def work():
+            try:
+                self.grp_q.put(("joined", sync.Session.join(server, code, self.grp_q.put), False))
+            except sync.SyncError as e:
+                self.grp_q.put(("joinfail", None, str(e), quiet))
+        threading.Thread(target=work, daemon=True).start()
+        self._render()
+
+    def _enter_group(self, s: sync.Session, hosted: bool) -> None:
+        if self.group:
+            self.group.stop()
+        if self.editing is not None:
+            self._end_edit(False)
+        self.hold = None
+        self.group, self.grp_state = s, "joining"     # "live" once the stream connects
+        self.board = Board()
+        self.pend_keep.clear()
+        self.pend_skip.clear()
+        self.offset = 0
+        s.start()
+        self.save()
+        self._layout()
+        if hosted:
+            self.group_dialog(hosted=True)
+        else:
+            self.flash(f"JOINED {s.code}", 4)
+
+    def leave_group(self, msg: str = "LEFT GROUP") -> None:
+        if not self.group:
+            return
+        self.group.stop()
+        self.group, self.grp_state = None, ""
+        if self.editing is not None:
+            self._end_edit(False)
+        self.hold = None
+        self.board = self.solo
+        self.offset = 0
+        self.save()
+        self._layout()
+        self.flash(msg, 5)
+
+    def confirm_end_group(self) -> None:
+        if not self.group:
+            return
+        self._dialog("END SESSION FOR EVERYONE?",
+                     f"This deletes group {self.group.code} and its timers for everyone in it. "
+                     "To just stop following it yourself, use Leave instead.",
+                     [("END IT", self._end_group), ("CANCEL", None)])
+
+    def _end_group(self) -> None:
+        if self.group:
+            self.group.end_for_everyone()
+
+    def copy_group_code(self) -> None:
+        if self.group:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(self.group.code)
+            self.root.update_idletasks()
+            self.flash(f"COPIED CODE {self.group.code}", 3)
+
+    def group_dialog(self, hosted: bool = False) -> None:
+        if not self.group:
+            return
+        code = self.group.code
+        spaced = f"{code[:3]} {code[3:]}"
+        body = (f"Code:  {spaced}\n\nFriends pick Join a group session and type this code. "
+                "Everyone sees the same timers; the first skull press counts."
+                if hosted else
+                f"Code:  {spaced}\n\nYou're in a shared session. Your own timers come back "
+                "when you leave.")
+        self._dialog("GROUP SESSION STARTED" if hosted else f"GROUP {code}", body,
+                     [("COPY CODE", self.copy_group_code), ("LEAVE", self.leave_group), ("OK", None)])
+
+    def _drain_group(self) -> None:
+        now_m = time.monotonic()
+        for d in (self.pend_keep, self.pend_skip):
+            for ch in [c for c, until in d.items() if until < now_m]:
+                d.pop(ch)
+        changed = False
+        while True:
+            try:
+                msg = self.grp_q.get_nowait()
+            except queue.Empty:
+                break
+            kind, s = msg[0], msg[1]
+            if kind == "joined":
+                self._enter_group(s, msg[2])
+                continue
+            if kind == "joinfail":
+                self.grp_state = "live" if self.group else ""
+                if msg[3]:                   # quiet rejoin at startup: just drop it
+                    self.cfg["group_code"] = ""
+                    self.cfg.save()
+                    if "EXPIRED" in msg[2] or "NO SESSION" in msg[2]:
+                        self.flash("LAST SESSION IS OVER", 4)
+                    else:
+                        self.flash(msg[2], 5)
+                else:
+                    self.flash(msg[2], 5)
+                continue
+            if s is not self.group:
+                continue                     # from a session we already left
+            if kind == "status":
+                self.grp_state = msg[2]
+            elif kind == "state":
+                room = msg[2]
+                if room is None:
+                    self.leave_group("SESSION ENDED")
+                    return
+                remote = sync.timers_from_room(room)
+                # our own echo arrived: stop shielding those channels
+                for ch in list(self.pend_keep):
+                    if ch in remote:
+                        self.pend_keep.pop(ch)
+                for ch in list(self.pend_skip):
+                    if ch not in remote:
+                        self.pend_skip.pop(ch)
+                removed = self.board.sync_from(remote, set(self.pend_keep), set(self.pend_skip))
+                if self.editing in removed:
+                    self._end_edit(False)
+                if self.hold and self.hold[0] in removed:
+                    self.hold = None
+                changed = True
+            elif kind == "rejected":
+                _k, _s, what, ch = msg
+                self.pend_keep.pop(ch, None)
+                self.flash(f"CH. {ch} JUST RESET" if what == "kill" else "CHANGE REFUSED", 3)
+            elif kind == "error":
+                self.flash(msg[2], 4)
+        if changed:
+            self._render()
+
+    def _dialog(self, title: str, body: str, buttons, entry: bool = False) -> None:
         if self.dialog:
             self.dialog.close()
-        self.dialog = Dialog(self, title, body, buttons)
+        self.dialog = Dialog(self, title, body, buttons, entry=entry)
 
     def quit(self) -> None:
         if self._closing:
             return
         self._closing = True
+        if self.group:
+            self.group.stop()        # leave the room as it is; we rejoin it next start
         if self.editing is not None:
             self._end_edit(True)
         if self.root.winfo_viewable():
@@ -856,6 +1098,14 @@ class App:
         m.add_checkbutton(label="Hide from screen capture", variable=hv,
                           command=lambda: self.set_cfg("hide_from_capture", not self.cfg["hide_from_capture"]))
         m.add_separator()
+        m.add_separator()
+        if self.group:
+            m.add_command(label=f"Group {self.group.code}: copy code", command=self.copy_group_code)
+            m.add_command(label="Leave group session", command=self.leave_group)
+            m.add_command(label="End session for everyone...", command=self.confirm_end_group)
+        else:
+            m.add_command(label="Host a group session", command=self.host_group)
+            m.add_command(label="Join a group session...", command=self.ask_join)
         m.add_separator()
         if self.update_rel:
             m.add_command(label=f"Install update {self.update_rel.tag}...", command=self.offer_update)
@@ -946,8 +1196,9 @@ class App:
 class Dialog:
     """Small CRT-styled message box beside the main window (no white system dialogs)."""
 
-    def __init__(self, app: App, title: str, body: str, buttons) -> None:
+    def __init__(self, app: App, title: str, body: str, buttons, entry: bool = False) -> None:
         self.app = app
+        self.var = None
         th = app.th
         self.win = w = tk.Toplevel(app.root, bg=th["dim"], padx=1, pady=1)
         w.overrideredirect(True)
@@ -960,6 +1211,16 @@ class Dialog:
                  justify="left").pack(fill="x")
         tk.Label(inner, text=body, bg=th["bg"], fg=th["fg"], font=app.f_small, anchor="w",
                  justify="left", wraplength=width).pack(fill="x", pady=(6, 10))
+        if entry:
+            self.var = tk.StringVar()
+            e = tk.Entry(inner, textvariable=self.var, font=app.f_time, width=8, relief="flat", bd=0,
+                         bg=th["glow"], fg=th["fg"], insertbackground=th["fg"],
+                         highlightthickness=1, highlightbackground=th["dim"], highlightcolor=th["fg"])
+            e.pack(anchor="w", pady=(0, 10))
+            first = next((a for _l, a in buttons if a), None)
+            e.bind("<Return>", lambda _e: self._click(first))
+            e.bind("<Escape>", lambda _e: self.close())
+            self.entry = e
         row = tk.Frame(inner, bg=th["bg"])
         row.pack(fill="x")
         for label, action in buttons:
@@ -972,6 +1233,8 @@ class Dialog:
         w.bind("<Escape>", lambda e: self.close())
         w.update_idletasks()
         self._place()
+        if entry:
+            w.after(50, lambda: (winapi.foreground(w.winfo_id()), w.focus_force(), self.entry.focus_force()))
 
     def _place(self) -> None:
         root, w = self.app.root, self.win
@@ -984,9 +1247,10 @@ class Dialog:
         w.geometry(f"+{int(x)}+{int(y)}")
 
     def _click(self, action) -> None:
+        text = self.var.get() if self.var is not None else None
         self.close()
         if action:
-            action()
+            action(text) if text is not None else action()
 
     def close(self) -> None:
         if self.win.winfo_exists():

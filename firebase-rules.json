@@ -1,0 +1,26 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+    "rooms": {
+      "$room": {
+        ".read": "$room.matches(/^[A-HJ-NP-Z2-9]{6}$/)",
+        ".write": "$room.matches(/^[A-HJ-NP-Z2-9]{6}$/)",
+        "created": { ".validate": "newData.isNumber() && newData.val() <= now" },
+        "updated": { ".validate": "newData.val() == now" },
+        "timers": {
+          "$ch": {
+            ".validate": "$ch.matches(/^ch([0-9]|[1-9][0-9]|100)$/) && newData.hasChildren(['channel', 'duration'])",
+            "channel": { ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 100" },
+            "duration": { ".validate": "newData.isNumber() && newData.val() >= 60 && newData.val() <= 86400" },
+            "killed_at": {
+              ".validate": "newData.isNumber() && newData.val() <= now && (newData.val() == data.val() || !data.exists() || (newData.val() == now && now - data.val() >= 10000))"
+            },
+            "$other": { ".validate": false }
+          }
+        },
+        "$other": { ".validate": false }
+      }
+    }
+  }
+}

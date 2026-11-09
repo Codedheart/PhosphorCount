@@ -78,6 +78,20 @@ def test_kill_restarts_and_counts_negative():
     assert t.fraction(5900.0) == 0.5
 
 
+def test_kill_cooldown_first_press_wins():
+    b = Board()
+    t = b.add()
+    assert b.kill(t.uid, 1000.0, 4800, cooldown=10)
+    assert not b.kill(t.uid, 1003.0, 4800, cooldown=10)      # second press 3 s later: ignored
+    assert t.killed_at == 1000.0
+    assert not b.kill(t.uid, 1009.9, 4800, cooldown=10)
+    assert b.kill(t.uid, 1010.0, 4800, cooldown=10)          # cooldown over
+    assert t.killed_at == 1010.0
+    assert b.kill(t.uid, 900.0, 4800, cooldown=10)           # clock went backwards: never locked
+    assert b.kill(t.uid, 901.0, 4800, cooldown=0)            # 0 = off
+    assert not b.kill(999, 2000.0, 4800)
+
+
 def test_remove():
     b = Board()
     t = b.add()
@@ -119,3 +133,21 @@ def test_status_text():
     assert status_text(t, 1000.0 + 3600 + 45) == "Ch. 25 is overtime by 45 seconds."
     assert status_text(t, 1000.0 + 3600 + 61) == "Ch. 25 is overtime by 1 minute."
     assert status_text(t, 1000.0 + 3600 + 600) == "Ch. 25 is overtime by 10 minutes."
+
+
+def test_sync_from_keeps_rows_stable():
+    b = Board()
+    fresh = b.add()                                   # local-only row, never touched
+    b.sync_from({25: (100.0, 4800), 3: (None, 4800)})
+    t25 = b.owner_of(25)
+    assert t25.killed_at == 100.0 and b.owner_of(3).killed_at is None
+    b.sync_from({25: (200.0, 4800), 3: (None, 4800)})
+    assert b.owner_of(25) is t25 and t25.killed_at == 200.0      # same row, new kill
+    removed = b.sync_from({25: (200.0, 4800)})
+    assert removed and b.owner_of(3) is None
+    # a channel we just added (not echoed yet) survives; one we just deleted isn't re-added
+    b.set_channel(fresh.uid, 9)
+    b.sync_from({25: (200.0, 4800)}, keep={9})
+    assert b.owner_of(9) is fresh
+    b.sync_from({25: (200.0, 4800), 9: (None, 4800)}, skip={25})
+    assert b.owner_of(25) is None and b.owner_of(9) is fresh

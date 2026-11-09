@@ -27,9 +27,12 @@ DEFAULTS: dict = {
     "theme": "green",             # see phosphor/themes.py
     "sort": "channel",            # "channel" | "time"
     "respawn_min": 80,            # countdown length used for the next boss kill
+    "kill_cooldown_sec": 10,      # repeat skull presses within this many seconds are ignored
     "soon_min": 5,                # timer turns the warning colour in its last N minutes (0 = off)
     "max_rows": 12,               # taller lists scroll with the mouse wheel
     "hide_from_capture": False,
+    "group_server": "",           # Firebase Realtime Database URL; empty = built-in default
+    "group_code": "",             # rejoin this group session on startup
     "auto_update": True,          # check GitHub for a newer release at startup / every few hours
     "timers": [],
     "config_version": 2,

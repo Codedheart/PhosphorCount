@@ -79,6 +79,14 @@ def status_text(t: Timer, now: float) -> str:
     return f"Ch. {t.channel} is overtime by {_amount(-s)}."
 
 
+def in_cooldown(t: Timer, now: float, cooldown: float) -> bool:
+    """True right after a kill, while repeat presses are ignored."""
+    if t.killed_at is None or cooldown <= 0:
+        return False
+    since = now - t.killed_at
+    return 0 <= since < cooldown      # a clock that jumped backwards never locks the button
+
+
 class Board:
     def __init__(self) -> None:
         self.timers: list[Timer] = []
@@ -101,12 +109,18 @@ class Board:
         self.timers.remove(t)
         return True
 
-    def kill(self, uid: int, now: float, duration: float) -> None:
-        """Boss died: (re)start the respawn countdown."""
+    def kill(self, uid: int, now: float, duration: float, cooldown: float = 0.0) -> bool:
+        """Boss died: (re)start the respawn countdown.
+
+        Returns False (and changes nothing) if this timer was already restarted less than
+        ``cooldown`` seconds ago, so several people hitting the skull at once only count once.
+        """
         t = self.get(uid)
-        if t is not None:
-            t.killed_at = now
-            t.duration = float(duration)
+        if t is None or in_cooldown(t, now, cooldown):
+            return False
+        t.killed_at = now
+        t.duration = float(duration)
+        return True
 
     def owner_of(self, channel: int, exclude: int | None = None) -> Timer | None:
         return next((t for t in self.timers
@@ -124,6 +138,29 @@ class Board:
         t.channel = channel
         t.fresh = False
         return None
+
+    def sync_from(self, remote: dict[int, tuple[float | None, float]],
+                  keep: set[int] = frozenset(), skip: set[int] = frozenset()) -> list[int]:
+        """Make the shared timers match a group room, keeping each channel's row (uid) stable.
+
+        remote: {channel: (killed_at, duration)}. Fresh rows (no channel yet) are local-only and
+        untouched. ``keep``: channels we just set ourselves that the server hasn't echoed yet;
+        ``skip``: channels we just deleted. Returns the uids that were removed.
+        """
+        removed = []
+        for t in [t for t in self.timers if not t.fresh]:
+            if (t.channel not in remote or t.channel in skip) and t.channel not in keep:
+                self.timers.remove(t)
+                removed.append(t.uid)
+        for ch, (killed_at, duration) in remote.items():
+            if ch in skip:
+                continue
+            t = self.owner_of(ch)
+            if t is None:
+                t = self.add()
+                t.channel, t.fresh = ch, False
+            t.killed_at, t.duration = killed_at, duration
+        return removed
 
     # ----------------------------------------------------------- ordering
     def ordered(self, mode: str, now: float) -> list[Timer]:
