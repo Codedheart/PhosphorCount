@@ -23,9 +23,9 @@ Using it:
 When a countdown hits zero the row flashes and keeps counting in red
 until you press the skull again.
 
-Group sessions: right-click > "Host a group session" and send your
-friends the 6-letter code; they pick "Join a group session..." and
-type it. Everyone then shares the same timers, and if two people hit
+Group sessions: right-click > "Host a group session..." (start clean
+or bring your current timers along) and send your friends the
+6-letter code; they pick "Join a group session..." and type it. Everyone then shares the same timers, and if two people hit
 the skull at once only the first press counts.
 
 Drag the window anywhere. Right-click for respawn time, opacity and

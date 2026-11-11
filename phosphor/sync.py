@@ -121,6 +121,24 @@ def move_update(old: int, new: int, killed_at: float | None, duration: float) ->
     return {f"timers/{key(old)}": None, f"timers/{key(new)}": node, "updated": SV}
 
 
+def adopt_update(timers, offset: float, server_now: float) -> dict:
+    """Copy the host's own timers into a brand-new room.
+
+    timers: [(channel, killed_at in this PC's clock or None, duration)]. Kill times are shifted
+    onto the server's clock and never later than the server's "now" (the rules refuse future kills).
+    """
+    update: dict = {"updated": SV}
+    latest = int(server_now * 1000) - 1000
+    for channel, killed_at, duration in timers:
+        if not (isinstance(channel, int) and 0 <= channel <= 100):
+            continue
+        node: dict = {"channel": channel, "duration": int(min(86400, max(60, round(duration))))}
+        if killed_at is not None:
+            node["killed_at"] = min(latest, int((killed_at + offset) * 1000))
+        update[f"timers/{key(channel)}"] = node
+    return update
+
+
 def delete_update(channel: int) -> dict:
     return {f"timers/{key(channel)}": None, "updated": SV}
 
@@ -203,7 +221,9 @@ class Session:
 
     # ---------------------------------------------------------- lifecycle
     @classmethod
-    def host(cls, server: str, post) -> "Session":
+    def host(cls, server: str, post, timers=None) -> "Session":
+        """Create a new room. ``timers`` (optional): the host's own timers to start with, as
+        [(channel, killed_at local seconds or None, duration)]."""
         rest = Rest(server)
         for _ in range(5):
             code = new_code()
@@ -212,7 +232,12 @@ class Session:
             if existing is None:
                 status, _ = rest.call("PUT", f"rooms/{code}", {"created": SV, "updated": SV})
                 _check(status)
-                return cls(server, code, post)
+                s = cls(server, code, post)
+                s.measure_offset()
+                if timers:
+                    status, _ = rest.call("PATCH", s.path, adopt_update(timers, s.offset, s.now()))
+                    _check(status)
+                return s
         raise SyncError("COULDN'T MAKE A CODE, TRY AGAIN")
 
     @classmethod

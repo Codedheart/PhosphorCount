@@ -871,16 +871,33 @@ class App:
                      [("OK", None)])
         return True
 
-    def host_group(self) -> None:
+    def ask_host(self) -> None:
+        """Start clean, or bring your own timers along (only asked if you have some)."""
+        if self._need_server() or self.grp_state == "joining":
+            return
+        mine = [t for t in self.solo.timers if not t.fresh]
+        if not mine:
+            self.host_group(bring=False)
+            return
+        n = len(mine)
+        self._dialog("HOST A GROUP SESSION",
+                     f"Start the group with an empty list, or copy your {n} current "
+                     f"timer{'s' if n != 1 else ''} into it so everyone starts from yours?\n\n"
+                     "Your own list stays as it is either way and comes back when you leave.",
+                     [(f"BRING MY {n}", lambda: self.host_group(bring=True)),
+                      ("START CLEAN", lambda: self.host_group(bring=False)), ("CANCEL", None)])
+
+    def host_group(self, bring: bool = False) -> None:
         if self._need_server() or self.grp_state == "joining":
             return
         self.grp_state = "joining"
         server = self._server()
+        # copies, taken now on the Tk thread: (channel, killed_at, duration)
+        timers = [(t.channel, t.killed_at, t.duration) for t in self.solo.timers if not t.fresh] if bring else None
 
         def work():
             try:
-                s = sync.Session.host(server, self.grp_q.put)
-                s.measure_offset()
+                s = sync.Session.host(server, self.grp_q.put, timers=timers)
                 self.grp_q.put(("joined", s, True))
             except sync.SyncError as e:
                 self.grp_q.put(("joinfail", None, str(e), False))
@@ -1104,7 +1121,7 @@ class App:
             m.add_command(label="Leave group session", command=self.leave_group)
             m.add_command(label="End session for everyone...", command=self.confirm_end_group)
         else:
-            m.add_command(label="Host a group session", command=self.host_group)
+            m.add_command(label="Host a group session...", command=self.ask_host)
             m.add_command(label="Join a group session...", command=self.ask_join)
         m.add_separator()
         if self.update_rel:
@@ -1223,6 +1240,7 @@ class Dialog:
             self.entry = e
         row = tk.Frame(inner, bg=th["bg"])
         row.pack(fill="x")
+        self._buttons = list(buttons)
         for label, action in buttons:
             b = tk.Label(row, text=f"[ {label} ]", bg=th["bg"], fg=th["mid"], font=app.f_small,
                          cursor="hand2")

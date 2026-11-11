@@ -48,14 +48,16 @@ says "Windows protected your PC", click **More info**, then **Run anyway**.
 
 Hunt with friends on one shared set of timers.
 
-- Right-click > **Host a group session**. You get a 6-letter code like `ZEC 43W`.
+- Right-click > **Host a group session...**. If you already have timers, choose **BRING MY n**
+  to copy them into the group, or **START CLEAN** for an empty list. You get a 6-letter code like `ZEC 43W`.
 - Friends right-click > **Join a group session...** and type the code.
 - Everyone sees the same list. Adding, editing, killing and deleting all sync within about a second.
 - **First skull press wins.** The server only accepts a kill if that timer wasn't reset in the
   last 10 seconds, so if several people press it at once, one counts and the rest see
   **CH. n JUST RESET**.
 - Kill times come from the server's clock, so everyone's countdown matches even if a PC clock is off.
-- Sessions start empty. Your own timers are put aside and come back when you leave.
+- Your own timers are put aside while you're in a group (bringing them copies them) and come
+  back unchanged when you leave.
 - **Leave group session** just stops following it. **End session for everyone** deletes it.
   A session nobody touched for 12 hours can't be joined any more.
 - If you close the app while in a session, it rejoins that session next time (if it's still going).

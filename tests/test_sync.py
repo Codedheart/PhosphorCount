@@ -128,3 +128,29 @@ def test_end_for_everyone(server):
         wait_for(qb, lambda m: m[0] == "state" and m[2] is None)
     finally:
         a.stop(); b.stop()
+
+
+def test_adopt_update_shifts_to_server_clock():
+    upd = sync.adopt_update([(25, 1000.0, 4800), (3, None, 3600), (7, 5100.0, 10)], offset=-90, server_now=4950.0)
+    assert upd["timers/ch25"] == {"channel": 25, "duration": 4800, "killed_at": 910000}
+    assert upd["timers/ch3"] == {"channel": 3, "duration": 3600}
+    # kill "in the future" for the server (PC clock ahead) is pulled back to just before now
+    assert upd["timers/ch7"] == {"channel": 7, "duration": 60, "killed_at": 4949000}
+
+
+def test_host_can_bring_their_timers(server):
+    q = queue.Queue()
+    now = time.time()
+    mine = [(12, now - 600, 4800), (3, now - 4900, 4800), (40, None, 4800)]
+    a = Session.host(server.url, q.put, timers=mine)
+    a.start()
+    try:
+        room = state_where(q, a, lambda t: len(t) == 3)
+        t = timers_from_room(room)
+        # same time left as on the host's own list, despite the server clock being 90 s ahead
+        assert abs((t[12][0] + t[12][1] - a.now()) - (4800 - 600)) < 2
+        assert abs((t[3][0] + t[3][1] - a.now()) - (4800 - 4900)) < 2     # overdue stays overdue
+        assert t[40][0] is None
+        assert server.rejected == 0
+    finally:
+        a.stop()
