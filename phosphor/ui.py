@@ -623,6 +623,41 @@ class App:
         self.save()
         self._render()
 
+    def ask_clear(self) -> None:
+        n = len(self.board.timers)
+        if not n:
+            return
+        who = (f"for everyone in group {self.group.code}" if self.group else "")
+        self._dialog("CLEAR ALL TIMERS?",
+                     f"REMOVE ALL deletes all {n} row{'s' if n != 1 else ''}{' ' + who if who else ''}.\n"
+                     "RESET TIMES keeps the channels and sets every countdown back to --:--.",
+                     [("REMOVE ALL", lambda: self.clear_all(False)),
+                      ("RESET TIMES", lambda: self.clear_all(True)), ("CANCEL", None)])
+
+    def clear_all(self, keep_channels: bool) -> None:
+        if self.editing is not None:
+            self._end_edit(False)
+        self.hold = None
+        until = time.monotonic() + PENDING_SEC
+        if keep_channels:
+            chans = self.board.reset_all()
+            if self.group and chans:
+                self.group.reset_all(chans)
+            self.alert.clear()
+            self.prev_rem.clear()
+            self.flash("ALL TIMERS RESET", 3)
+        else:
+            chans = self.board.clear()
+            if self.group:
+                for ch in chans:
+                    self.pend_skip[ch] = until
+                self.pend_keep.clear()
+                self.group.clear_all()
+            self.offset = 0
+            self.flash("ALL TIMERS CLEARED", 3)
+        self.save()
+        self._layout()
+
     def _cooldown(self) -> float:
         if self.group:
             return float(sync.COOLDOWN_SEC)   # the server enforces this one
@@ -1079,6 +1114,8 @@ class App:
                   activeforeground=th["fg"], font=self.f_small)
         m = tk.Menu(self.root, **mk)
         m.add_command(label="Add timer", command=self.add_timer)
+        m.add_command(label="Clear all timers...", command=self.ask_clear,
+                      state="normal" if self.board.timers else "disabled")
         m.add_separator()
         sv = tk.StringVar(value=self.cfg["sort"])
         m.add_radiobutton(label="Sort by channel", value=SORT_CHANNEL, variable=sv,

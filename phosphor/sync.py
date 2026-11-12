@@ -139,6 +139,16 @@ def adopt_update(timers, offset: float, server_now: float) -> dict:
     return update
 
 
+def clear_update() -> dict:
+    return {"timers": None, "updated": SV}
+
+
+def reset_update(channels) -> dict:
+    update: dict = {f"timers/{key(ch)}/killed_at": None for ch in channels}
+    update["updated"] = SV
+    return update
+
+
 def delete_update(channel: int) -> dict:
     return {f"timers/{key(channel)}": None, "updated": SV}
 
@@ -298,6 +308,12 @@ class Session:
 
     def delete(self, channel: int) -> None:
         self.send("delete", delete_update(channel), channel)
+
+    def clear_all(self) -> None:
+        self.send("clear", clear_update(), None)
+
+    def reset_all(self, channels) -> None:
+        self.send("reset", reset_update(channels), None)
 
     def end_for_everyone(self) -> None:
         self.send("end", {}, None)

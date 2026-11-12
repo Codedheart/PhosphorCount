@@ -29,6 +29,7 @@ says "Windows protected your PC", click **More info**, then **Run anyway**.
 | **X** (hold 3 s) | Delete the timer. A red bar fills while you hold; let go early to cancel |
 | **BY CH / BY TIME** | Toggle sorting: by channel number, or by time left (most time left at the top, overdue at the bottom, not-started after that) |
 | Drag empty space | Move the window |
+| Right-click > **Clear all timers...** | **REMOVE ALL** deletes every row; **RESET TIMES** keeps the channels and sets them all back to `--:--`. In a group session this applies for everyone |
 | Right-click | Menu: respawn time, warning highlight, opacity, color palette, hide from screen capture, check for updates, open settings folder, exit |
 | Mouse wheel | Scroll when you have more timers than fit (12 rows by default) |
 

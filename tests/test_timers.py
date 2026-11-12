@@ -151,3 +151,14 @@ def test_sync_from_keeps_rows_stable():
     assert b.owner_of(9) is fresh
     b.sync_from({25: (200.0, 4800), 9: (None, 4800)}, skip={25})
     assert b.owner_of(25) is None and b.owner_of(9) is fresh
+
+
+def test_clear_and_reset_all():
+    b = Board()
+    for ch in (3, 12):
+        t = b.add(); b.set_channel(t.uid, ch); b.kill(t.uid, 100.0, 4800)
+    b.add()                                   # fresh row
+    assert sorted(b.reset_all()) == [3, 12]
+    assert len(b.timers) == 3 and not any(t.running for t in b.timers)
+    assert b.reset_all() == []                # nothing running any more
+    assert sorted(b.clear()) == [3, 12] and b.timers == []

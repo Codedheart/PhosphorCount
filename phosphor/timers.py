@@ -162,6 +162,19 @@ class Board:
             t.killed_at, t.duration = killed_at, duration
         return removed
 
+    def clear(self) -> list[int]:
+        """Remove every timer. Returns the channels that were set (for the group server)."""
+        chans = [t.channel for t in self.timers if not t.fresh]
+        self.timers.clear()
+        return chans
+
+    def reset_all(self) -> list[int]:
+        """Keep the rows but stop every countdown (back to --:--). Returns channels that changed."""
+        chans = [t.channel for t in self.timers if t.running and not t.fresh]
+        for t in self.timers:
+            t.killed_at = None
+        return chans
+
     # ----------------------------------------------------------- ordering
     def ordered(self, mode: str, now: float) -> list[Timer]:
         """Display order. New timers without a channel always stay at the bottom, in the

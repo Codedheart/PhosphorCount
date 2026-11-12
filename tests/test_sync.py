@@ -154,3 +154,20 @@ def test_host_can_bring_their_timers(server):
         assert server.rejected == 0
     finally:
         a.stop()
+
+
+def test_group_reset_and_clear_all(server):
+    qa, qb = queue.Queue(), queue.Queue()
+    a = Session.host(server.url, qa.put, timers=[(5, time.time() - 60, 4800), (9, time.time() - 30, 4800)])
+    b = Session.join(server.url, a.code, qb.put)
+    a.start(); b.start()
+    try:
+        state_where(qb, b, lambda t: len(t) == 2 and all(v[0] for v in t.values()))
+        a.reset_all([5, 9])
+        state_where(qb, b, lambda t: sorted(t) == [5, 9] and all(v[0] is None for v in t.values()))
+        a.clear_all()
+        state_where(qb, b, lambda t: t == {})
+        assert server.rejected == 0
+        assert server.tree["rooms"][a.code]["created"]       # the room itself is still there
+    finally:
+        a.stop(); b.stop()
