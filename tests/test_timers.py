@@ -162,3 +162,15 @@ def test_clear_and_reset_all():
     assert len(b.timers) == 3 and not any(t.running for t in b.timers)
     assert b.reset_all() == []                # nothing running any more
     assert sorted(b.clear()) == [3, 12] and b.timers == []
+
+
+def test_transfer_to_another_boss():
+    mm, sh = Board(), Board()
+    for ch in (3, 12, 25):
+        t = mm.add(); mm.set_channel(t.uid, ch); mm.kill(t.uid, 100.0 + ch, 4800)
+    fresh = mm.add()
+    t = sh.add(); sh.set_channel(t.uid, 25)           # Shade already has ch25
+    moved, skipped = mm.transfer_to(sh)
+    assert sorted(t.channel for t in moved) == [3, 12] and skipped == [25]
+    assert [t.channel for t in mm.timers] == [25]     # the clash stays where it was
+    assert sh.owner_of(3).killed_at == 103.0 and fresh in sh.timers

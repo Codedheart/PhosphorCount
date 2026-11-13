@@ -762,6 +762,30 @@ class App:
         self.save()
         self._render()
 
+    def move_timers_to(self, dst: str) -> None:
+        """Move every timer on this boss's list to another boss (e.g. timed under the wrong one)."""
+        src = self.boss
+        if dst == src or not bosses.valid(dst) or not self.board.timers:
+            return
+        if self.editing is not None:
+            self._end_edit(True)
+        self.hold = None
+        moved, skipped = self.board.transfer_to(self.boards[dst])
+        if self.group and moved:
+            until = time.monotonic() + PENDING_SEC
+            for t in moved:
+                self.pend_skip[(src, t.channel)] = until
+                self.pend_keep.pop((src, t.channel), None)
+                self.pend_keep[(dst, t.channel)] = until
+            self.group.transfer(src, dst, [(t.channel, t.killed_at, t.duration) for t in moved])
+        self.save()
+        self.set_boss(dst)               # follow them, so you can see where they went
+        msg = f"MOVED TO {bosses.SHORT[dst]}"
+        if skipped:
+            msg = f"{len(skipped)} KEPT: CH. ALREADY THERE"
+        self.flash(msg, 5)
+        self._render()
+
     def ask_clear(self) -> None:
         n = len(self.board.timers)
         if not n:
@@ -1281,6 +1305,13 @@ class App:
             subb.add_radiobutton(label=f" {name}  ", image=self._badge_img(b, th["fg"]), compound="left",
                                  value=b, variable=bv, command=lambda b=b: self.set_boss(b))
         m.add_cascade(label=f"Boss: {bosses.NAMES[self.boss]}", menu=subb)
+        subm = tk.Menu(m, **mk)
+        for b, name in bosses.BOSSES:
+            if b != self.boss:
+                subm.add_command(label=f" {name}  ", image=self._badge_img(b, th["fg"]), compound="left",
+                                 command=lambda b=b: self.move_timers_to(b))
+        m.add_cascade(label=f"Move these {bosses.NAMES[self.boss]} timers to", menu=subm,
+                      state="normal" if self.board.timers else "disabled")
         sub = tk.Menu(m, **mk)
         cur = int(self.respawn_min())
         rv = tk.IntVar(value=cur)

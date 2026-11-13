@@ -31,6 +31,8 @@ boss has and how many are up), or scroll the mouse wheel over it to flip through
 - Alerts work for every boss, not just the one on screen. **+n UP** on the right of the boss row
   counts timers that are up on the other bosses.
 - **Respawn time** (right-click) is set per boss.
+- Timed them under the wrong boss? Right-click > **Move these ... timers to** moves the whole
+  list to another boss, countdowns and all (in a group, for everyone).
 - **Clear all timers...** and the copied status line (`Shade Ch. 25 is ready in 12 minutes.`)
   apply to the boss on screen.
 

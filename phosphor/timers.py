@@ -165,6 +165,23 @@ class Board:
             t.killed_at, t.duration = killed_at, duration
         return removed
 
+    def transfer_to(self, other: "Board") -> tuple[list[Timer], list[int]]:
+        """Move every timer to another board (another boss), keeping countdowns and rows.
+
+        A channel the other board already has stays here instead of overwriting it.
+        Returns (moved timers that have a channel, channels that were skipped).
+        """
+        moved, skipped = [], []
+        for t in list(self.timers):
+            if not t.fresh and other.owner_of(t.channel):
+                skipped.append(t.channel)
+                continue
+            self.timers.remove(t)
+            other.timers.append(t)
+            if not t.fresh:
+                moved.append(t)
+        return moved, skipped
+
     def clear(self) -> list[int]:
         """Remove every timer. Returns the channels that were set (for the group server)."""
         chans = [t.channel for t in self.timers if not t.fresh]

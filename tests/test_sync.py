@@ -203,3 +203,21 @@ def test_bosses_are_independent_in_a_group(server):
         assert server.rejected == 0
     finally:
         a.stop(); b.stop()
+
+
+def test_transfer_between_bosses_in_a_group(server):
+    qa, qb = queue.Queue(), queue.Queue()
+    now = time.time()
+    a = Session.host(server.url, qa.put, timers=[("mm", 4, now - 300, 4800), ("mm", 9, None, 4800)])
+    b = Session.join(server.url, a.code, qb.put)
+    a.start(); b.start()
+    try:
+        room = state_where(qb, b, lambda t: len(t) == 2)
+        k4 = timers_from_room(room)["mm"][4][0]
+        a.transfer("mm", "sh", [(4, k4, 4800), (9, None, 4800)])
+        room = state_where(qb, b, lambda t: sorted(t) == [4, 9], boss="sh")
+        t = timers_from_room(room)
+        assert t["mm"] == {} and t["sh"][4][0] == pytest.approx(k4, abs=0.01) and t["sh"][9][0] is None
+        assert server.rejected == 0
+    finally:
+        a.stop(); b.stop()

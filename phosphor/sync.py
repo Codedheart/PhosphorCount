@@ -162,6 +162,18 @@ def reset_update(boss: str, channels) -> dict:
     return update
 
 
+def transfer_update(src: str, dst: str, items) -> dict:
+    """Move timers from one boss to another. items: [(channel, killed_at seconds or None, duration)]."""
+    update: dict = {"updated": SV}
+    for channel, killed_at, duration in items:
+        node: dict = {"channel": channel, "duration": round(duration)}
+        if killed_at is not None:
+            node["killed_at"] = int(killed_at * 1000)
+        update[f"timers/{key(src, channel)}"] = None
+        update[f"timers/{key(dst, channel)}"] = node
+    return update
+
+
 def delete_update(boss: str, channel: int) -> dict:
     return {f"timers/{key(boss, channel)}": None, "updated": SV}
 
@@ -322,6 +334,10 @@ class Session:
 
     def delete(self, boss: str, channel: int) -> None:
         self.send("delete", delete_update(boss, channel), (boss, channel))
+
+    def transfer(self, src: str, dst: str, items) -> None:
+        if items:
+            self.send("transfer", transfer_update(src, dst, items), None)
 
     def clear_all(self, boss: str, channels) -> None:
         if channels:
