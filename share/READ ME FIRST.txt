@@ -12,21 +12,26 @@ No install needed.
    then "Run anyway". (It shows that for any small app that isn't
    signed by a big company.)
 
+Bosses: the row under the title picks the boss (Mushmom, Zombie
+Mushmom, Stumpy, Shade, Rotting Mushmom). Click it for a list, or
+scroll over it. Each boss has its own timers, and the kill button on
+each row is that boss's icon so you always know which list you're in.
+
 Using it:
   +            add a timer (it shows up as Ch. 0 - type the channel, Enter)
   Ch. 0        click it to change the channel number (0-100)
-  Skull        the boss died: start the 80-minute respawn countdown
+  Boss icon    the boss died: start the respawn countdown
   Copy         copy "Ch. 25 is ready in 12 minutes." to paste in chat
   X            hold for 3 seconds to delete the timer
   BY CH        click to switch between sorting by channel and by time left
 
 When a countdown hits zero the row flashes and keeps counting in red
-until you press the skull again.
+until you press the boss icon again.
 
 Group sessions: right-click > "Host a group session..." (start clean
 or bring your current timers along) and send your friends the
 6-letter code; they pick "Join a group session..." and type it. Everyone then shares the same timers, and if two people hit
-the skull at once only the first press counts.
+the kill button at once only the first press counts.
 
 Drag the window anywhere. Right-click for respawn time, opacity and
 color palettes.

@@ -18,13 +18,29 @@ Ch. 40          --:--    ☠  ⧉  ✕     <- not started yet
 under *Assets*. Right-click it, **Extract All…**, then double-click **`PhosphorCount.exe`**. If Windows
 says "Windows protected your PC", click **More info**, then **Run anyway**.
 
+## Bosses
+
+The row under the header picks which boss you're timing: **Mushmom**, **Zombie Mushmom**,
+**Stumpy**, **Shade** or **Rotting Mushmom**. Click it for a dropdown (it shows how many timers each
+boss has and how many are up), or scroll the mouse wheel over it to flip through them.
+
+- Each boss has its own list, so Ch. 25 can have a Mushmom timer and a Shade timer at once.
+- The kill button on every row is that boss's icon, so you can tell at a glance which list
+  you're in: an orange, grey or blue mushroom (Mushmom, Zombie Mushmom, Rotting Mushmom),
+  a ghost (Shade) or a leafless tree (Stumpy).
+- Alerts work for every boss, not just the one on screen. **+n UP** on the right of the boss row
+  counts timers that are up on the other bosses.
+- **Respawn time** (right-click) is set per boss.
+- **Clear all timers...** and the copied status line (`Shade Ch. 25 is ready in 12 minutes.`)
+  apply to the boss on screen.
+
 ## How it works
 
 | | |
 |---|---|
 | **+** | Add a timer. It appears at the bottom as **Ch. 0** with the number ready to type |
 | **Ch. 0** (click it) | Edit the channel number in place: type 0-100, **Enter** to save, **Esc** to cancel. Up/Down arrows or the mouse wheel step it by one |
-| **Skull** | The boss died: start (or restart) the respawn countdown |
+| **Boss icon** | The boss died: start (or restart) the respawn countdown |
 | **Copy** (two pages) | Copy a status line to paste in chat: `Ch. 25 is ready in 12 minutes.` or `Ch. 10 is overtime by 45 seconds.` (seconds under a minute, otherwise minutes) |
 | **X** (hold 3 s) | Delete the timer. A red bar fills while you hold; let go early to cancel |
 | **BY CH / BY TIME** | Toggle sorting: by channel number, or by time left (most time left at the top, overdue at the bottom, not-started after that) |
@@ -33,9 +49,9 @@ says "Windows protected your PC", click **More info**, then **Run anyway**.
 | Right-click | Menu: respawn time, warning highlight, opacity, color palette, hide from screen capture, check for updates, open settings folder, exit |
 | Mouse wheel | Scroll when you have more timers than fit (12 rows by default) |
 
-- Timers don't start on their own. Press the skull when the boss dies.
+- Timers don't start on their own. Press the boss icon when the boss dies.
 - When a countdown reaches zero, the row flashes and the header says **CH. n BOSS IS UP**. It then
-  keeps counting in red (`-00:01`, `-00:02`…) until you press the skull again.
+  keeps counting in red (`-00:01`, `-00:02`…) until you press the boss icon again.
 - The respawn time defaults to **80 minutes**. Changing it in the menu applies to the next kill, so
   timers already running keep their length.
 - In its last 5 minutes a timer turns the palette's warning color (change or turn off in the menu).
@@ -53,7 +69,7 @@ Hunt with friends on one shared set of timers.
   to copy them into the group, or **START CLEAN** for an empty list. You get a 6-letter code like `ZEC 43W`.
 - Friends right-click > **Join a group session...** and type the code.
 - Everyone sees the same list. Adding, editing, killing and deleting all sync within about a second.
-- **First skull press wins.** The server only accepts a kill if that timer wasn't reset in the
+- **First kill press wins.** The server only accepts a kill if that timer wasn't reset in the
   last 10 seconds, so if several people press it at once, one counts and the rest see
   **CH. n JUST RESET**.
 - Kill times come from the server's clock, so everyone's countdown matches even if a PC clock is off.

@@ -3,7 +3,8 @@
 A session is a short-lived room:  rooms/<CODE>/
     created   server timestamp (ms)
     updated   server timestamp (ms), touched by every write
-    timers/ch<N>/ { channel: N, duration: seconds, killed_at: server ms }
+    timers/<boss>-ch<N>/ { channel: N, duration: seconds, killed_at: server ms }
+        <boss> is a 2-letter id from bosses.py, e.g. timers/sh-ch25 = Shade, channel 25
 
 Rules (firebase-rules.json) do the refereeing on the server:
   * killed_at must be the server's own clock ("now"), so PC clocks don't matter
@@ -26,6 +27,8 @@ import time
 import urllib.error
 import urllib.request
 from typing import Any, Callable
+
+from . import bosses
 
 # Filled in once the Firebase project exists. config.json "group_server" overrides it.
 DEFAULT_SERVER = "https://phosphorcount-default-rtdb.firebaseio.com"
@@ -54,27 +57,34 @@ def normalize_code(text: str) -> str | None:
     return c if CODE_RE.match(c) else None
 
 
-def key(channel: int) -> str:
-    return f"ch{int(channel)}"
+def key(boss: str, channel: int) -> str:
+    """Room key for one boss's channel, e.g. 'sh-ch25' (Shade, channel 25)."""
+    return f"{boss}-ch{int(channel)}"
 
 
-def timers_from_room(room: Any) -> dict[int, tuple[float | None, float]]:
-    """{channel: (killed_at seconds in server time or None, duration seconds)}"""
-    out: dict[int, tuple[float | None, float]] = {}
+KEY_RE = re.compile(r"^(?P<boss>[a-z]{2})-ch(?P<ch>[0-9]{1,3})$")
+
+Remote = dict  # {boss: {channel: (killed_at seconds in server time or None, duration seconds)}}
+
+
+def timers_from_room(room: Any) -> "Remote":
+    """Group the room's timers by boss. Keys that don't fit the current format are ignored."""
+    out: dict[str, dict[int, tuple[float | None, float]]] = {b: {} for b in bosses.IDS}
     timers = room.get("timers") if isinstance(room, dict) else None
     if not isinstance(timers, dict):
         return out
-    for node in timers.values():
-        if not isinstance(node, dict):
+    for k, node in timers.items():
+        m = KEY_RE.match(str(k))
+        if not m or m["boss"] not in out or not isinstance(node, dict):
             continue
         ch = node.get("channel")
-        if not isinstance(ch, int) or isinstance(ch, bool) or not 0 <= ch <= 100:
+        if not isinstance(ch, int) or isinstance(ch, bool) or not 0 <= ch <= 100 or ch != int(m["ch"]):
             continue
         ka = node.get("killed_at")
         ka = ka / 1000.0 if isinstance(ka, (int, float)) and not isinstance(ka, bool) else None
         d = node.get("duration")
         d = float(d) if isinstance(d, (int, float)) and not isinstance(d, bool) and d > 0 else 4800.0
-        out[ch] = (ka, d)
+        out[m["boss"]][ch] = (ka, d)
     return out
 
 
@@ -102,55 +112,58 @@ def apply_event(tree: Any, path: str, data: Any, patch: bool) -> Any:
 
 
 # Multi-path updates sent as one PATCH on rooms/<CODE> (atomic on the server)
-def create_update(channel: int, duration: float) -> dict:
+def create_update(boss: str, channel: int, duration: float) -> dict:
     # only set channel/duration: never wipes a kill someone else just recorded
-    return {f"timers/{key(channel)}/channel": channel,
-            f"timers/{key(channel)}/duration": round(duration), "updated": SV}
+    k = key(boss, channel)
+    return {f"timers/{k}/channel": channel, f"timers/{k}/duration": round(duration), "updated": SV}
 
 
-def kill_update(channel: int, duration: float) -> dict:
-    return {f"timers/{key(channel)}/channel": channel,
-            f"timers/{key(channel)}/duration": round(duration),
-            f"timers/{key(channel)}/killed_at": SV, "updated": SV}
+def kill_update(boss: str, channel: int, duration: float) -> dict:
+    k = key(boss, channel)
+    return {f"timers/{k}/channel": channel, f"timers/{k}/duration": round(duration),
+            f"timers/{k}/killed_at": SV, "updated": SV}
 
 
-def move_update(old: int, new: int, killed_at: float | None, duration: float) -> dict:
+def move_update(boss: str, old: int, new: int, killed_at: float | None, duration: float) -> dict:
     node: dict = {"channel": new, "duration": round(duration)}
     if killed_at is not None:
         node["killed_at"] = int(killed_at * 1000)
-    return {f"timers/{key(old)}": None, f"timers/{key(new)}": node, "updated": SV}
+    return {f"timers/{key(boss, old)}": None, f"timers/{key(boss, new)}": node, "updated": SV}
 
 
 def adopt_update(timers, offset: float, server_now: float) -> dict:
     """Copy the host's own timers into a brand-new room.
 
-    timers: [(channel, killed_at in this PC's clock or None, duration)]. Kill times are shifted
+    timers: [(boss, channel, killed_at in this PC's clock or None, duration)]. Kill times are shifted
     onto the server's clock and never later than the server's "now" (the rules refuse future kills).
     """
     update: dict = {"updated": SV}
     latest = int(server_now * 1000) - 1000
-    for channel, killed_at, duration in timers:
-        if not (isinstance(channel, int) and 0 <= channel <= 100):
+    for boss, channel, killed_at, duration in timers:
+        if not bosses.valid(boss) or not (isinstance(channel, int) and 0 <= channel <= 100):
             continue
         node: dict = {"channel": channel, "duration": int(min(86400, max(60, round(duration))))}
         if killed_at is not None:
             node["killed_at"] = min(latest, int((killed_at + offset) * 1000))
-        update[f"timers/{key(channel)}"] = node
+        update[f"timers/{key(boss, channel)}"] = node
     return update
 
 
-def clear_update() -> dict:
-    return {"timers": None, "updated": SV}
-
-
-def reset_update(channels) -> dict:
-    update: dict = {f"timers/{key(ch)}/killed_at": None for ch in channels}
+def clear_update(boss: str, channels) -> dict:
+    """Remove all of one boss's timers (other bosses are untouched)."""
+    update: dict = {f"timers/{key(boss, ch)}": None for ch in channels}
     update["updated"] = SV
     return update
 
 
-def delete_update(channel: int) -> dict:
-    return {f"timers/{key(channel)}": None, "updated": SV}
+def reset_update(boss: str, channels) -> dict:
+    update: dict = {f"timers/{key(boss, ch)}/killed_at": None for ch in channels}
+    update["updated"] = SV
+    return update
+
+
+def delete_update(boss: str, channel: int) -> dict:
+    return {f"timers/{key(boss, channel)}": None, "updated": SV}
 
 
 # ------------------------------------------------------------------- REST
@@ -233,7 +246,7 @@ class Session:
     @classmethod
     def host(cls, server: str, post, timers=None) -> "Session":
         """Create a new room. ``timers`` (optional): the host's own timers to start with, as
-        [(channel, killed_at local seconds or None, duration)]."""
+        [(boss, channel, killed_at local seconds or None, duration)]."""
         rest = Rest(server)
         for _ in range(5):
             code = new_code()
@@ -292,28 +305,31 @@ class Session:
             self.post(("offset", self, self.offset))
 
     # ----------------------------------------------------------- writing
-    def send(self, kind: str, update: dict, channel: int | None = None) -> None:
+    def send(self, kind: str, update: dict, target: tuple | None = None) -> None:
+        """Queue a write. ``target`` is (boss, channel), reported back if the server refuses it."""
         with self._cv:
-            self._jobs.append((kind, update, channel))
+            self._jobs.append((kind, update, target))
             self._cv.notify()
 
-    def kill(self, channel: int, duration: float) -> None:
-        self.send("kill", kill_update(channel, duration), channel)
+    def kill(self, boss: str, channel: int, duration: float) -> None:
+        self.send("kill", kill_update(boss, channel, duration), (boss, channel))
 
-    def create(self, channel: int, duration: float) -> None:
-        self.send("create", create_update(channel, duration), channel)
+    def create(self, boss: str, channel: int, duration: float) -> None:
+        self.send("create", create_update(boss, channel, duration), (boss, channel))
 
-    def move(self, old: int, new: int, killed_at: float | None, duration: float) -> None:
-        self.send("move", move_update(old, new, killed_at, duration), new)
+    def move(self, boss: str, old: int, new: int, killed_at: float | None, duration: float) -> None:
+        self.send("move", move_update(boss, old, new, killed_at, duration), (boss, new))
 
-    def delete(self, channel: int) -> None:
-        self.send("delete", delete_update(channel), channel)
+    def delete(self, boss: str, channel: int) -> None:
+        self.send("delete", delete_update(boss, channel), (boss, channel))
 
-    def clear_all(self) -> None:
-        self.send("clear", clear_update(), None)
+    def clear_all(self, boss: str, channels) -> None:
+        if channels:
+            self.send("clear", clear_update(boss, channels), None)
 
-    def reset_all(self, channels) -> None:
-        self.send("reset", reset_update(channels), None)
+    def reset_all(self, boss: str, channels) -> None:
+        if channels:
+            self.send("reset", reset_update(boss, channels), None)
 
     def end_for_everyone(self) -> None:
         self.send("end", {}, None)
@@ -333,14 +349,14 @@ class Session:
                         next_offset = time.time() + OFFSET_EVERY_SEC
                         self.measure_offset()
                     continue
-                kind, update, channel = job
+                kind, update, target = job
                 if kind == "end":
                     status, _ = self.rest.call("DELETE", self.path)
                 else:
                     status, _ = self.rest.call("PATCH", self.path, update)
                 if status in (401, 403):
                     # rules said no: for a kill that means someone else got there first
-                    self.post(("rejected", self, kind, channel))
+                    self.post(("rejected", self, kind, target))
                     self.post(("state", self, copy.deepcopy(self.room)))     # undo our guess
                 elif status >= 400:
                     self.post(("error", self, f"GROUP SERVER ERROR {status}"))

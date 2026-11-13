@@ -5,6 +5,7 @@ and reopening the app.
 """
 from __future__ import annotations
 
+import itertools
 import math
 from dataclasses import dataclass
 
@@ -65,18 +66,19 @@ def _amount(seconds: int) -> str:
     return f"{m} minute{'s' if m != 1 else ''}"
 
 
-def status_text(t: Timer, now: float) -> str:
+def status_text(t: Timer, now: float, boss: str = "") -> str:
     """One line to paste into chat, e.g. 'Ch. 25 is ready in 12 minutes.'"""
+    who = f"{boss} Ch. {t.channel} " if boss else f"Ch. {t.channel} "
     r = t.remaining(now)
     if r is None:
-        return f"Ch. {t.channel} has no timer running."
+        return f"{who}has no timer running."
     s = math.ceil(r - 1e-6)
     if s > 0:
         # round up so "ready in" never promises the boss earlier than it spawns
-        return f"Ch. {t.channel} is ready in {_amount(s if s < 60 else math.ceil(s / 60) * 60)}."
+        return f"{who}is ready in {_amount(s if s < 60 else math.ceil(s / 60) * 60)}."
     if s == 0:
-        return f"Ch. {t.channel} is ready now."
-    return f"Ch. {t.channel} is overtime by {_amount(-s)}."
+        return f"{who}is ready now."
+    return f"{who}is overtime by {_amount(-s)}."
 
 
 def in_cooldown(t: Timer, now: float, cooldown: float) -> bool:
@@ -87,15 +89,16 @@ def in_cooldown(t: Timer, now: float, cooldown: float) -> bool:
     return 0 <= since < cooldown      # a clock that jumped backwards never locks the button
 
 
+_UIDS = itertools.count(1)     # unique across every board, so per-row UI state never collides
+
+
 class Board:
     def __init__(self) -> None:
         self.timers: list[Timer] = []
-        self._next = 1
 
     # ------------------------------------------------------------ editing
     def add(self) -> Timer:
-        t = Timer(self._next)
-        self._next += 1
+        t = Timer(next(_UIDS))
         self.timers.append(t)
         return t
 

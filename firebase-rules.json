@@ -10,7 +10,7 @@
         "updated": { ".validate": "newData.val() == now" },
         "timers": {
           "$ch": {
-            ".validate": "$ch.matches(/^ch([0-9]|[1-9][0-9]|100)$/) && newData.hasChildren(['channel', 'duration'])",
+            ".validate": "$ch.matches(/^((mm|zm|st|sh|rm)-)?ch([0-9]|[1-9][0-9]|100)$/) && newData.hasChildren(['channel', 'duration'])",
             "channel": { ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 100" },
             "duration": { ".validate": "newData.isNumber() && newData.val() >= 60 && newData.val() <= 86400" },
             "killed_at": {

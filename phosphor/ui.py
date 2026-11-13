@@ -11,7 +11,7 @@ import webbrowser
 import tkinter.font as tkfont
 from pathlib import Path
 
-from . import sync, themes, updater, winapi
+from . import bosses, sync, themes, updater, winapi
 from .config import APP_NAME, Config, data_dir
 from .version import VERSION
 from .timers import (CH_MAX, SORT_CHANNEL, SORT_TIME, Board, channel_text_ok, fmt_clock,
@@ -25,14 +25,6 @@ UPDATE_CHECK_MS = 6 * 3600 * 1000   # re-check GitHub every 6 hours while open
 PENDING_SEC = 6.0     # how long our own group edits are trusted before the server echoes them
 
 # 8x8 pixel icons, drawn as rectangles so they scale and follow the palette
-SKULL = [".######.",
-         "########",
-         "#..##..#",
-         "#..##..#",
-         "########",
-         "###..###",
-         ".######.",
-         ".#.##.#."]
 CROSS = ["##....##",
          "###..###",
          ".######.",
@@ -49,6 +41,9 @@ COPY = ["#####...",
         "####...#",
         "...#...#",
         "...#####"]
+CARET = ["#####",
+         ".###.",
+         "..#.."]
 PLUS = ["...##...",
         "...##...",
         "...##...",
@@ -59,14 +54,21 @@ PLUS = ["...##...",
         "...##..."]
 
 
-def _runs(bitmap: list[str]):
+def _mix(a: str, b: str, t: float) -> str:
+    """Blend two #RRGGBB colours (t=0 -> a, t=1 -> b)."""
+    ca = [int(a[i:i + 2], 16) for i in (1, 3, 5)]
+    cb = [int(b[i:i + 2], 16) for i in (1, 3, 5)]
+    return "#%02X%02X%02X" % tuple(round(x + (y - x) * t) for x, y in zip(ca, cb))
+
+
+def _runs(bitmap: list[str], mark: str = "#"):
     """(row, start, length) for each horizontal run of '#', so an icon is a handful of rects."""
     for y, line in enumerate(bitmap):
         x = 0
         while x < len(line):
-            if line[x] == "#":
+            if line[x] == mark:
                 s = x
-                while x < len(line) and line[x] == "#":
+                while x < len(line) and line[x] == mark:
                     x += 1
                 yield y, s, x - s
             else:
@@ -77,8 +79,10 @@ class App:
     def __init__(self) -> None:
         winapi.set_dpi_aware()
         self.cfg = Config()
-        self.solo = Board.from_list(self.cfg.get("timers"))   # your own timers
-        self.board = self.solo                                # what's on screen (solo or group)
+        if not bosses.valid(self.cfg.get("boss")):
+            self.cfg["boss"] = bosses.DEFAULT
+        self.solo_boards = self._load_solo(self.cfg.get("timers"))   # your own timers, per boss
+        self.grp_boards: dict[str, Board] | None = None             # a group session's, per boss
         if self.cfg["sort"] not in (SORT_CHANNEL, SORT_TIME):
             self.cfg["sort"] = SORT_CHANNEL
 
@@ -106,8 +110,9 @@ class App:
         self.grp_q: "queue.Queue[tuple]" = queue.Queue()
         self.group: sync.Session | None = None      # joined group session
         self.grp_state = ""                         # "", "joining", "live", "reconnecting"
-        self.pend_keep: dict[int, float] = {}       # channel -> until: our adds not echoed yet
-        self.pend_skip: dict[int, float] = {}       # channel -> until: our deletes not echoed yet
+        self.pend_keep: dict[tuple, float] = {}     # (boss, channel) -> until: our adds not echoed yet
+        self.pend_skip: dict[tuple, float] = {}     # (boss, channel) -> until: our deletes not echoed yet
+        self._badge_imgs: dict = {}
 
         self.root = tk.Tk()
         self.root.report_callback_exception = self._log_exc
@@ -139,9 +144,9 @@ class App:
         c.bind("<Motion>", self._motion)
         c.bind("<Leave>", self._leave)
         c.bind("<Button-3>", self._menu)
-        c.bind("<MouseWheel>", lambda e: self._scroll(-1 if e.delta > 0 else 1))
-        c.bind("<Button-4>", lambda e: self._scroll(-1))
-        c.bind("<Button-5>", lambda e: self._scroll(1))
+        c.bind("<MouseWheel>", lambda e: self._wheel(e, -1 if e.delta > 0 else 1))
+        c.bind("<Button-4>", lambda e: self._wheel(e, -1))
+        c.bind("<Button-5>", lambda e: self._wheel(e, 1))
 
         self._layout()
         self.root.after_idle(self._after_mapped)
@@ -217,8 +222,104 @@ class App:
             self.root.attributes("-topmost", True)
             self.root.lift()
 
+    # --------------------------------------------------------------- bosses
+    @staticmethod
+    def _load_solo(rows) -> dict[str, Board]:
+        rows = [r for r in rows if isinstance(r, dict)] if isinstance(rows, list) else []
+        def boss_of(r):
+            return r.get("boss") if bosses.valid(r.get("boss")) else bosses.DEFAULT   # pre-1.5 rows: Mushmom
+        return {b: Board.from_list([r for r in rows if boss_of(r) == b]) for b in bosses.IDS}
+
+    @property
+    def boss(self) -> str:
+        return self.cfg["boss"]
+
+    @property
+    def boards(self) -> dict[str, Board]:
+        return self.grp_boards if self.grp_boards is not None else self.solo_boards
+
+    @property
+    def board(self) -> Board:
+        """The list on screen: the selected boss's, solo or group."""
+        return self.boards[self.boss]
+
+    def respawn_min(self, boss: str | None = None) -> float:
+        per = self.cfg.get("respawn") if isinstance(self.cfg.get("respawn"), dict) else {}
+        try:
+            return max(1.0, float(per.get(boss or self.boss, self.cfg["respawn_min"])))
+        except (TypeError, ValueError):
+            return 80.0
+
+    def set_respawn(self, boss: str, mins: int) -> None:
+        per = dict(self.cfg.get("respawn") or {})
+        per[boss] = mins
+        self.set_cfg("respawn", per)
+
+    def set_boss(self, boss: str) -> None:
+        if not bosses.valid(boss) or boss == self.boss:
+            return
+        if self.editing is not None:
+            self._end_edit(True)
+        self.hold = None
+        self.cfg["boss"] = boss
+        self.cfg.save()
+        self.offset = 0
+        self._layout()
+
+    def _wheel(self, e, step: int) -> None:
+        if self.hh < e.y < self.y_rows - 2:       # over the boss selector: flip through bosses
+            i = bosses.IDS.index(self.boss)
+            self.set_boss(bosses.IDS[(i + step) % len(bosses.IDS)])
+        else:
+            self._scroll(step)
+
+    def _badge_img(self, boss: str, color: str) -> tk.PhotoImage:
+        """The boss icon as a small image, for menus."""
+        k = (boss, color, self.th["bg"])
+        if k not in self._badge_imgs:
+            p = max(2, self.px)
+            rows = bosses.ICONS[boss]
+            cap = bosses.CAPS.get(boss, color)
+            im = tk.PhotoImage(master=self.root, width=len(rows[0]) * p + 4, height=len(rows) * p + 2)
+            im.put(self.th["bg"], to=(0, 0, len(rows[0]) * p + 4, len(rows) * p + 2))
+            for y, row, in enumerate(rows):
+                for x, ch in enumerate(row):
+                    if ch in "#c":
+                        im.put(cap if ch == "c" else color,
+                               to=(2 + x * p, 1 + y * p, 2 + (x + 1) * p, 1 + (y + 1) * p))
+            self._badge_imgs[k] = im
+        return self._badge_imgs[k]
+
+    def choose_boss(self) -> None:
+        """Dropdown under the selector: each boss with its badge and how many of its timers are up."""
+        th = self.th
+        m = tk.Menu(self.root, tearoff=0, bg=th["bg"], fg=th["fg"], activebackground=th["glow"],
+                    activeforeground=th["fg"], font=self.f_mid)
+        bv = tk.StringVar(value=self.boss)
+        now = self.now()
+        for b, name in bosses.BOSSES:
+            timers = self.boards[b].timers
+            up = sum(1 for t in timers if t.running and t.remaining(now) <= 0)
+            extra = f"   {len(timers)} timer{'s' if len(timers) != 1 else ''}" if timers else ""
+            extra += f", {up} UP" if up else ""
+            m.add_radiobutton(label=f" {name}{extra}  ", image=self._badge_img(b, th["late"] if up else th["fg"]),
+                              compound="left", value=b, variable=bv, command=lambda b=b: self.set_boss(b))
+        self._menu_vars = (bv,)
+        x = self.root.winfo_rootx() + self.L
+        y = self.root.winfo_rooty() + self.y_rows - 2
+        self._menu_open = True
+        m.bind("<Unmap>", lambda _e: self._menu_closed())
+        winapi.foreground(self.root.winfo_id())
+        try:
+            m.tk_popup(x, y)
+        finally:
+            m.grab_release()
+            if winapi.IS_WIN:
+                self._menu_closed()
+
     def save(self) -> None:
-        self.cfg["timers"] = self.solo.to_list()     # group timers live on the server
+        # group timers live on the server; only your own are saved
+        self.cfg["timers"] = [dict(r, boss=b) for b, bd in self.solo_boards.items() for r in bd.to_list()]
         self.cfg["group_code"] = self.group.code if self.group else ""
         self.cfg.save()
 
@@ -231,24 +332,28 @@ class App:
         self.px = max(2, round(self.lh_m / 11))
         self.isz = 8 * self.px
         self.L = 10
-        self.rh = max(self.lh_t, self.isz + 6) + 3
+        self.bw, self.bh = bosses.W * self.px, bosses.H * self.px     # boss icon size
+        self.rh = max(self.lh_t, self.bh + 6) + 3
         self.hh = max(self.lh_s, self.isz) + 8
-        # columns: [Ch. 100] [  -00:00] [skull] [copy] [X]
+        self.brow = max(self.lh_m, self.bh) + 6                     # boss selector row
+        # columns: [Ch. 100] [  -00:00] [boss icon] [copy] [X]
         lab_w = md.measure("Ch. 100")
         time_w = tm.measure("-000:00")
         self.x_time = self.L + lab_w + 6 + time_w             # right edge of the countdown
         self.x_skull = self.x_time + 10
-        self.x_copy = self.x_skull + self.isz + 8
+        self.x_copy = self.x_skull + self.bw + 8
         self.x_del = self.x_copy + self.isz + 12
         row_w = self.x_del + self.isz + 10
         head_w = self.L + sm.measure("PHOSPHOR-COUNT █") + 10 + sm.measure("BY TIME") + 8 + self.isz + 10
-        self.W = max(row_w, head_w)
+        sel_w = (self.L + self.bw + 8 + md.measure("ROTTING MUSHMOM ") + 5 * self.px + 14
+                 + sm.measure("+88 UP") + 10)
+        self.W = max(row_w, head_w, sel_w)
         self.R = self.W - 10
 
     def _max_rows(self) -> int:
         wa = winapi.work_area(self.root.winfo_id())
         screen_h = (wa[3] - wa[1]) if wa else self.root.winfo_screenheight()
-        fit = max(3, (screen_h - 80 - self.hh) // self.rh)
+        fit = max(3, (screen_h - 80 - self.hh - self.brow) // self.rh)
         try:
             want = int(self.cfg["max_rows"])
         except (TypeError, ValueError):
@@ -263,7 +368,7 @@ class App:
         self.nvis = min(n, self._max_rows())
         self._rows_shown = n
         self.offset = max(0, min(self.offset, n - self.nvis))
-        self.y_rows = self.hh + 5
+        self.y_rows = self.hh + self.brow + 5
         H = self.y_rows + max(1, self.nvis) * self.rh + 6
         self.H = H
         W = self.W
@@ -273,6 +378,8 @@ class App:
         c.create_rectangle(1, 1, W - 2, H - 2, outline=th["dim"])
         c.create_rectangle(3, 3, W - 4, H - 4, outline=th["glow"])
         c.create_line(self.L - 2, self.hh + 1, self.R + 2, self.hh + 1, fill=th["glow"])
+        yb = self.hh + self.brow + 1
+        c.create_line(self.L - 2, yb, self.R + 2, yb, fill=th["dim"])
         for yy in range(0, H, 3):
             c.create_line(0, yy, W, yy, fill=th["scan"], stipple="" if winapi.IS_WIN else "gray50",
                           tags=("scan",))
@@ -290,11 +397,22 @@ class App:
                               fill=self.th["glow"], tags=("dyn",))
         c.create_text(x, y, text=text, font=font, anchor=anchor, fill=color, tags=("dyn",))
 
-    def _icon(self, bitmap, x, y, color) -> None:
+    def _icon(self, bitmap, x, y, color, cap: str | None = None) -> None:
+        """'#' pixels in ``color``; 'c' pixels (a mushroom cap) in ``cap`` (default: ``color``)."""
         p = self.px
-        for row, start, length in _runs(bitmap):
-            self.canvas.create_rectangle(x + start * p, y + row * p, x + (start + length) * p - 1,
-                                         y + (row + 1) * p - 1, fill=color, width=0, tags=("dyn", "icon"))
+        for mark, col in (("#", color), ("c", cap or color)):
+            for row, start, length in _runs(bitmap, mark):
+                self.canvas.create_rectangle(x + start * p, y + row * p, x + (start + length) * p - 1,
+                                             y + (row + 1) * p - 1, fill=col, width=0, tags=("dyn", "icon"))
+
+    def _boss_icon(self, boss: str, x, y, color, state: str = "") -> None:
+        """Boss icon; state 'pulse' / 'cooldown' tints the fixed-colour cap to match."""
+        cap = bosses.CAPS.get(boss)
+        if cap and state == "pulse":
+            cap = color
+        elif cap and state == "cooldown":
+            cap = _mix(cap, self.th["bg"], 0.6)
+        self._icon(bosses.ICONS[boss], x, y, color, cap)
 
     def _fit(self, text: str, room: int, font) -> str:
         if font.measure(text) <= room:
@@ -360,6 +478,24 @@ class App:
             self._text(L, hy, f"PHOSPHOR-COUNT {'█' if self.blink else ' '}", self.f_small, th["dim"],
                        glow=False)
 
+        # boss selector: badge + name + caret, and how many timers are up on the other bosses
+        by = self.hh + 2 + self.brow // 2
+        hov = self.hover == ("boss", None)
+        sel_col = th["fg"] if hov else th["mid"]
+        self._boss_icon(self.boss, L, by - self.bh // 2, sel_col)
+        name = bosses.NAMES[self.boss].upper()
+        xn = L + self.bw + 8
+        self._text(xn, by, name, self.f_mid, sel_col)
+        xc = xn + self.f_mid.measure(name) + 6
+        self._icon(CARET, xc, by - px, sel_col)
+        self._hit(L - 3, self.hh + 2, xc + 5 * px + 3, self.hh + self.brow, "boss")
+        others_up = sum(1 for b, bd in self.boards.items() if b != self.boss
+                        for t in bd.timers if t.running and t.remaining(now_w) <= 0)
+        if others_up:
+            txt = f"+{others_up} UP"
+            self._hit(R - self.f_small.measure(txt) - 3, self.hh + 2, R + 3, self.hh + self.brow, "boss")
+            self._text(R, by, txt, self.f_small, th["late"], anchor="e", glow=False)
+
         order = self._current_order(now_w)
         self._check_alerts(now_w, now_m)
         if not order:
@@ -397,18 +533,19 @@ class App:
                 col = th["fg"]
             self._text(self.x_time, yc, fmt_clock(rem), self.f_time, col, anchor="e")
 
-            # skull (boss killed) and X (hold to delete)
+            # boss icon (boss killed: start the timer), copy, and X (hold to delete)
             iy = yc - isz // 2
-            self._hit(self.x_skull - 3, y0, self.x_skull + isz + 3, y0 + self.rh - 3, "kill", uid)
+            self._hit(self.x_skull - 3, y0, self.x_skull + self.bw + 3, y0 + self.rh - 3, "kill", uid)
+            state = ""
             if self.pulse.get(uid, 0) > now_m:
-                sk = th["warn"]
+                sk, state = th["warn"], "pulse"
             elif in_cooldown(t, now_w, self._cooldown()):
-                sk = th["dim"]          # locked for a few seconds after a kill
+                sk, state = th["dim"], "cooldown"     # locked for a few seconds after a kill
             elif self.hover == ("kill", uid):
                 sk = th["fg"]
             else:
                 sk = th["mid"]
-            self._icon(SKULL, self.x_skull, iy, sk)
+            self._boss_icon(self.boss, self.x_skull, yc - self.bh // 2, sk, state)
             self._hit(self.x_copy - 3, y0, self.x_copy + isz + 3, y0 + self.rh - 3, "copy", uid)
             if self.copied.get(uid, 0) > now_m:
                 cc = th["warn"]
@@ -462,7 +599,7 @@ class App:
 
     def _check_alerts(self, now_w: float, now_m: float) -> None:
         live = set()
-        for t in self.board.timers:
+        for boss, t in ((b, t) for b, bd in self.boards.items() for t in bd.timers):
             live.add(t.uid)
             r = t.remaining(now_w)
             if r is None:
@@ -471,7 +608,7 @@ class App:
             prev = self.prev_rem.get(t.uid)
             if prev is not None and prev > 0 >= r:
                 self.alert[t.uid] = now_m + ALERT_SEC
-                self.flash(f"CH. {t.channel} BOSS IS UP", ALERT_SEC)
+                self.flash(f"{bosses.SHORT[boss]} CH.{t.channel} UP", ALERT_SEC)
             self.prev_rem[t.uid] = r
         for d in (self.prev_rem, self.alert, self.pulse, self.copied):
             for uid in [u for u in d if u not in live]:
@@ -523,6 +660,8 @@ class App:
             self.offer_update()
         elif kind == "group":
             self.group_dialog()
+        elif kind == "boss":
+            self.choose_boss()
         elif kind == "del":
             self.hold = (uid, time.monotonic())
             self._hold_tick()
@@ -576,9 +715,9 @@ class App:
             t = self.board.get(uid)
             self.board.remove(uid)
             if t and self.group and not t.fresh:
-                self.pend_skip[t.channel] = time.monotonic() + PENDING_SEC
-                self.pend_keep.pop(t.channel, None)
-                self.group.delete(t.channel)
+                self.pend_skip[(self.boss, t.channel)] = time.monotonic() + PENDING_SEC
+                self.pend_keep.pop((self.boss, t.channel), None)
+                self.group.delete(self.boss, t.channel)
             self.save()
             if t:
                 self.flash(f"CH. {t.channel} DELETED", 3)
@@ -611,12 +750,12 @@ class App:
         if self.group and t.fresh:
             self.flash("SET THE CHANNEL FIRST", 3)
             return
-        if not self.board.kill(uid, self.now(), float(self.cfg["respawn_min"]) * 60, self._cooldown()):
+        if not self.board.kill(uid, self.now(), self.respawn_min() * 60, self._cooldown()):
             self.flash(f"CH. {t.channel} JUST RESET", 2)
             return
         if self.group:
             # shown right away; the server stamps the real time (or refuses if someone beat us)
-            self.group.kill(t.channel, t.duration)
+            self.group.kill(self.boss, t.channel, t.duration)
         self.pulse[uid] = time.monotonic() + 0.35
         self.alert.pop(uid, None)
         self.prev_rem.pop(uid, None)
@@ -627,10 +766,12 @@ class App:
         n = len(self.board.timers)
         if not n:
             return
-        who = (f"for everyone in group {self.group.code}" if self.group else "")
-        self._dialog("CLEAR ALL TIMERS?",
-                     f"REMOVE ALL deletes all {n} row{'s' if n != 1 else ''}{' ' + who if who else ''}.\n"
-                     "RESET TIMES keeps the channels and sets every countdown back to --:--.",
+        who = (f" for everyone in group {self.group.code}" if self.group else "")
+        name = bosses.NAMES[self.boss]
+        self._dialog(f"CLEAR {name.upper()} TIMERS?",
+                     f"REMOVE ALL deletes all {n} {name} row{'s' if n != 1 else ''}{who}.\n"
+                     "RESET TIMES keeps the channels and sets every countdown back to --:--.\n\n"
+                     "Other bosses' timers aren't touched.",
                      [("REMOVE ALL", lambda: self.clear_all(False)),
                       ("RESET TIMES", lambda: self.clear_all(True)), ("CANCEL", None)])
 
@@ -642,19 +783,19 @@ class App:
         if keep_channels:
             chans = self.board.reset_all()
             if self.group and chans:
-                self.group.reset_all(chans)
+                self.group.reset_all(self.boss, chans)
             self.alert.clear()
             self.prev_rem.clear()
-            self.flash("ALL TIMERS RESET", 3)
+            self.flash(f"{bosses.SHORT[self.boss]} TIMERS RESET", 3)
         else:
             chans = self.board.clear()
             if self.group:
                 for ch in chans:
-                    self.pend_skip[ch] = until
-                self.pend_keep.clear()
-                self.group.clear_all()
+                    self.pend_skip[(self.boss, ch)] = until
+                    self.pend_keep.pop((self.boss, ch), None)
+                self.group.clear_all(self.boss, chans)
             self.offset = 0
-            self.flash("ALL TIMERS CLEARED", 3)
+            self.flash(f"{bosses.SHORT[self.boss]} CLEARED", 3)
         self.save()
         self._layout()
 
@@ -667,12 +808,12 @@ class App:
             return 10.0
 
     def copy_status(self, uid: int) -> None:
-        """Put e.g. 'Ch. 25 is ready in 12 minutes.' on the clipboard, ready to paste in chat."""
+        """Put e.g. 'Shade Ch. 25 is ready in 12 minutes.' on the clipboard, ready to paste in chat."""
         t = self.board.get(uid)
         if t is None:
             return
         self.root.clipboard_clear()
-        self.root.clipboard_append(status_text(t, self.now()))
+        self.root.clipboard_append(status_text(t, self.now(), bosses.NAMES[self.boss]))
         self.root.update_idletasks()
         self.copied[uid] = time.monotonic() + 0.6
         self.flash(f"COPIED CH. {t.channel}", 2)
@@ -738,13 +879,14 @@ class App:
             else:
                 if self.group and t and (was_fresh or old != t.channel):
                     until = time.monotonic() + PENDING_SEC
-                    self.pend_keep[t.channel] = until
-                    self.pend_skip.pop(t.channel, None)
+                    b = self.boss
+                    self.pend_keep[(b, t.channel)] = until
+                    self.pend_skip.pop((b, t.channel), None)
                     if was_fresh:
-                        self.group.create(t.channel, float(self.cfg["respawn_min"]) * 60)
+                        self.group.create(b, t.channel, self.respawn_min() * 60)
                     else:
-                        self.pend_skip[old] = until
-                        self.group.move(old, t.channel, t.killed_at, t.duration)
+                        self.pend_skip[(b, old)] = until
+                        self.group.move(b, old, t.channel, t.killed_at, t.duration)
                 self.save()
         self.entry.place_forget()
         self.canvas.focus_set()
@@ -910,14 +1052,14 @@ class App:
         """Start clean, or bring your own timers along (only asked if you have some)."""
         if self._need_server() or self.grp_state == "joining":
             return
-        mine = [t for t in self.solo.timers if not t.fresh]
+        mine = [t for bd in self.solo_boards.values() for t in bd.timers if not t.fresh]
         if not mine:
             self.host_group(bring=False)
             return
         n = len(mine)
         self._dialog("HOST A GROUP SESSION",
                      f"Start the group with an empty list, or copy your {n} current "
-                     f"timer{'s' if n != 1 else ''} into it so everyone starts from yours?\n\n"
+                     f"timer{'s' if n != 1 else ''} (all bosses) into it so everyone starts from yours?\n\n"
                      "Your own list stays as it is either way and comes back when you leave.",
                      [(f"BRING MY {n}", lambda: self.host_group(bring=True)),
                       ("START CLEAN", lambda: self.host_group(bring=False)), ("CANCEL", None)])
@@ -927,8 +1069,9 @@ class App:
             return
         self.grp_state = "joining"
         server = self._server()
-        # copies, taken now on the Tk thread: (channel, killed_at, duration)
-        timers = [(t.channel, t.killed_at, t.duration) for t in self.solo.timers if not t.fresh] if bring else None
+        # copies, taken now on the Tk thread: (boss, channel, killed_at, duration)
+        timers = [(b, t.channel, t.killed_at, t.duration) for b, bd in self.solo_boards.items()
+                  for t in bd.timers if not t.fresh] if bring else None
 
         def work():
             try:
@@ -970,7 +1113,7 @@ class App:
             self._end_edit(False)
         self.hold = None
         self.group, self.grp_state = s, "joining"     # "live" once the stream connects
-        self.board = Board()
+        self.grp_boards = {b: Board() for b in bosses.IDS}
         self.pend_keep.clear()
         self.pend_skip.clear()
         self.offset = 0
@@ -990,7 +1133,7 @@ class App:
         if self.editing is not None:
             self._end_edit(False)
         self.hold = None
-        self.board = self.solo
+        self.grp_boards = None
         self.offset = 0
         self.save()
         self._layout()
@@ -1064,24 +1207,32 @@ class App:
                 if room is None:
                     self.leave_group("SESSION ENDED")
                     return
-                remote = sync.timers_from_room(room)
+                remote = sync.timers_from_room(room)          # {boss: {channel: (killed_at, duration)}}
                 # our own echo arrived: stop shielding those channels
-                for ch in list(self.pend_keep):
-                    if ch in remote:
-                        self.pend_keep.pop(ch)
-                for ch in list(self.pend_skip):
-                    if ch not in remote:
-                        self.pend_skip.pop(ch)
-                removed = self.board.sync_from(remote, set(self.pend_keep), set(self.pend_skip))
+                for b, ch in list(self.pend_keep):
+                    if ch in remote[b]:
+                        self.pend_keep.pop((b, ch))
+                for b, ch in list(self.pend_skip):
+                    if ch not in remote[b]:
+                        self.pend_skip.pop((b, ch))
+                removed = []
+                for b, bd in self.grp_boards.items():
+                    removed += bd.sync_from(remote[b], {c for bb, c in self.pend_keep if bb == b},
+                                            {c for bb, c in self.pend_skip if bb == b})
                 if self.editing in removed:
                     self._end_edit(False)
                 if self.hold and self.hold[0] in removed:
                     self.hold = None
                 changed = True
             elif kind == "rejected":
-                _k, _s, what, ch = msg
-                self.pend_keep.pop(ch, None)
-                self.flash(f"CH. {ch} JUST RESET" if what == "kill" else "CHANGE REFUSED", 3)
+                _k, _s, what, target = msg
+                if target:
+                    self.pend_keep.pop(target, None)
+                if what == "kill" and target:
+                    b, ch = target
+                    self.flash(f"CH. {ch} JUST RESET" if b == self.boss else f"{bosses.SHORT[b]} CH.{ch} JUST RESET", 3)
+                else:
+                    self.flash("CHANGE REFUSED", 3)
             elif kind == "error":
                 self.flash(msg[2], 4)
         if changed:
@@ -1124,13 +1275,20 @@ class App:
                           command=lambda: self.set_sort(SORT_TIME))
         m.add_separator()
 
+        subb = tk.Menu(m, **mk)
+        bv = tk.StringVar(value=self.boss)
+        for b, name in bosses.BOSSES:
+            subb.add_radiobutton(label=f" {name}  ", image=self._badge_img(b, th["fg"]), compound="left",
+                                 value=b, variable=bv, command=lambda b=b: self.set_boss(b))
+        m.add_cascade(label=f"Boss: {bosses.NAMES[self.boss]}", menu=subb)
         sub = tk.Menu(m, **mk)
-        rv = tk.IntVar(value=int(self.cfg["respawn_min"]))
-        sub.add_command(label="applies to the next kill", state="disabled")
-        for mins in (15, 30, 45, 60, 80, 90, 120, 180):
+        cur = int(self.respawn_min())
+        rv = tk.IntVar(value=cur)
+        sub.add_command(label=f"{bosses.NAMES[self.boss]}, applies to the next kill", state="disabled")
+        for mins in sorted({15, 30, 45, 60, 80, 90, 120, 180, cur}):
             sub.add_radiobutton(label=f"{mins} min", value=mins, variable=rv,
-                                command=lambda v=mins: self.set_cfg("respawn_min", v))
-        m.add_cascade(label=f"Respawn time ({int(self.cfg['respawn_min'])} min)", menu=sub)
+                                command=lambda v=mins, b=self.boss: self.set_respawn(b, v))
+        m.add_cascade(label=f"Respawn time ({cur} min)", menu=sub)
 
         sub2 = tk.Menu(m, **mk)
         wv = tk.IntVar(value=int(self.cfg.get("soon_min") or 0))
@@ -1171,7 +1329,7 @@ class App:
         m.add_command(label=f"Phosphor Count {self._version_label()}", state="disabled")
         m.add_separator()
         m.add_command(label="Exit", command=self.quit)
-        self._menu_vars = (sv, rv, wv, ov, tv, hv, av)   # keep references alive
+        self._menu_vars = (sv, rv, wv, ov, tv, hv, av, bv)   # keep references alive
 
         x, y = self._menu_pos(m, e.x_root, e.y_root)
         self._menu_open = True

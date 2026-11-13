@@ -27,6 +27,8 @@ DEFAULTS: dict = {
     "theme": "green",             # see phosphor/themes.py
     "sort": "channel",            # "channel" | "time"
     "respawn_min": 80,            # countdown length used for the next boss kill
+    "respawn": {},                # per boss: {"sh": 45, ...}; bosses not listed use respawn_min
+    "boss": "mm",                 # boss list currently shown (see phosphor/bosses.py)
     "kill_cooldown_sec": 10,      # repeat skull presses within this many seconds are ignored
     "soon_min": 5,                # timer turns the warning colour in its last N minutes (0 = off)
     "max_rows": 12,               # taller lists scroll with the mouse wheel

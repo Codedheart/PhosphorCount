@@ -17,7 +17,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 ROOM = re.compile(r"^[A-HJ-NP-Z2-9]{6}$")
-CH = re.compile(r"^ch([0-9]|[1-9][0-9]|100)$")
+CH = re.compile(r"^((mm|zm|st|sh|rm)-)?ch([0-9]|[1-9][0-9]|100)$")
 
 
 def _get(tree, parts):
